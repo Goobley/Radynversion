@@ -26,13 +26,18 @@ class DataSchema1D:
         self.zero_pad = zero_pad_fn
         # Check schema is valid
         padCount = sum(1 if i[0] == PadOp else 0 for i in inp)
-        if padCount > 1:
-            raise ValueError('Schema can only contain one \'!!PAD\' instruction.')
-        if len(inp) > len(set([i[0] for i in inp])):
+        for i in range(len(inp)-1):
+            if inp[i][0] == PadOp and inp[i+1][0] == PadOp:
+                raise ValueError('Schema cannot contain two consecutive \'!!PAD\' instructions.')
+        # if padCount > 1:
+        #     raise ValueError('Schema can only contain one \'!!PAD\' instruction.')
+        if len([i for i in inp if i[0] != PadOp]) > len(set([i[0] for i in inp if i[0] != PadOp])):
             raise ValueError('Schema names must be unique within a schema.')
         
         # Find length without extra padding (beyond normal channel separation)
         length = schema_min_len(inp, zeroPadding)
+        if (minLength - length) // padCount != (minLength - length) / padCount:
+            raise ValueError('Schema padding isn\'t divisible by number of PadOps')
 
         # Build schema
         schema = []
@@ -46,7 +51,7 @@ class DataSchema1D:
                         del schema[-1]
 
                 if length < minLength:
-                    schema.append((ZeroPadOp, minLength - length))
+                    schema.append((ZeroPadOp, (minLength - length) // padCount))
                 continue
 
             schema.append(i)
@@ -69,6 +74,8 @@ class DataSchema1D:
             else:
                 fusedSchema.append(schema[i])
             i += 1
+        # Also remove 0-width ZeroPadding
+        fusedSchema = [s for s in fusedSchema if s != (ZeroPadOp, 0)]
         self.schema = fusedSchema
         schemaTags = [s[0] for s in self.schema if s[0] != ZeroPadOp]
         tagIndices = [0] + list(accumulate([s[1] for s in self.schema]))
@@ -213,15 +220,15 @@ class RadynversionTrainer:
 
         lTot = 0
         miniBatchIdx = 0
-        wRevScale = max(epoch / (1.0 * self.numEpochs), 1)**2
-        # noiseScale = (1 - wRevScale) * self.zerosNoiseScale
-        noiseScale = self.zerosNoiseScale
+        wRevScale = min(epoch / (0.5 * self.numEpochs), 1)**3
+        noiseScale = (1 - wRevScale) * self.zerosNoiseScale
+        # noiseScale = self.zerosNoiseScale
 
         # def pad_fn(*x):
         #     # return noiseScale * torch.randn(*x)
         #     return torch.zeros(*x)
-        pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev)
-        # pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
+        # pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev)
+        pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
         randn = lambda *x: torch.randn(*x, device=self.dev)
 
         for x, y in self.atmosData.trainLoader:
@@ -278,12 +285,13 @@ class RadynversionTrainer:
             outRevRand = self.model(yzpRevRand, rev=True)
 
             # THis guy should have been OUTREVRAND!!!
-            # xBack = torch.cat((outRev[:, self.model.inSchema.ne],
-            #                    outRev[:, self.model.inSchema.temperature],
-            #                    outRev[:, self.model.inSchema.vel]),
+            # xBack = torch.cat((outRevRand[:, self.model.inSchema.ne],
+            #                    outRevRand[:, self.model.inSchema.temperature],
+            #                    outRevRand[:, self.model.inSchema.vel]),
             #                   dim=1)
             # lBackward = self.wRev * wRevScale * self.loss_backward(xBack, x.reshape(self.miniBatchSize, -1))
-            lBackward = self.wRev * wRevScale * self.loss_backward(outRevRand[:, :self.model.inSchema.vel[-1]+1], xp[:, :self.model.inSchema.vel[-1]+1])
+            lBackward = self.wRev * wRevScale * self.loss_backward(outRevRand[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], 
+                                                                   xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1])
 
             lBackward += 0.5 * self.wPred * self.loss_fit(outRev, xp)
             lTot += lBackward.data.item()
@@ -335,10 +343,10 @@ class RadynversionTrainer:
                     self.loss_fit(out[:, self.model.inSchema.vel], x[:, 2])
                 backwardError.append(b)
         
-        fE = np.mean(forwardError)
-        bE = np.mean(backwardError)
+            fE = np.mean(forwardError)
+            bE = np.mean(backwardError)
 
-        return fE, bE
+            return fE, bE, out, outBack
 
 
 class AtmosData:
