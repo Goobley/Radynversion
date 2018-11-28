@@ -3,7 +3,7 @@ from torch import nn
 import numpy as np
 
 from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet
-from FrEIA.modules import rev_multiplicative_layer, F_fully_connected, permute_layer, flattening_layer, split_layer, cat_layer, glow_coupling_layer
+from FrEIA.modules import rev_multiplicative_layer, permute_layer
 
 from loss import mse, mse_tv, mmd_multiscale_on
 
@@ -138,9 +138,68 @@ class DataSchema1D:
     def __repr__(self):
         return repr(self.schema)
 
+class F_fully_connected_leaky(nn.Module):
+    '''Fully connected tranformation, not reversible, but used below.'''
+
+    def __init__(self, size_in, size, internal_size=None, dropout=0.0,
+                 batch_norm=False, leaky_slope=0.01):
+        super(F_fully_connected_leaky, self).__init__()
+        if not internal_size:
+            internal_size = 2*size
+
+        self.d1 = nn.Dropout(p=dropout)
+        self.d2 = nn.Dropout(p=dropout)
+        self.d2b = nn.Dropout(p=dropout)
+
+        self.fc1 = nn.Linear(size_in, internal_size)
+        self.fc2 = nn.Linear(internal_size, internal_size)
+        self.fc2b = nn.Linear(internal_size, internal_size)
+        # self.fc2c = nn.Linear(internal_size, internal_size)
+        self.fc2d  = nn.Linear(internal_size, internal_size)
+        self.fc3 = nn.Linear(internal_size, size)
+
+        self.nl1 = nn.LeakyReLU(negative_slope=leaky_slope)
+        self.nl2 = nn.LeakyReLU(negative_slope=leaky_slope)
+        self.nl2b = nn.LeakyReLU(negative_slope=leaky_slope)
+        # self.nl2c = nn.LeakyReLU(negative_slope=leaky_slope)
+        self.nl2d = nn.ReLU()
+
+        if batch_norm:
+            self.bn1 = nn.BatchNorm1d(internal_size)
+            self.bn1.weight.data.fill_(1)
+            self.bn2 = nn.BatchNorm1d(internal_size)
+            self.bn2.weight.data.fill_(1)
+            self.bn2b = nn.BatchNorm1d(internal_size)
+            self.bn2b.weight.data.fill_(1)
+        self.batch_norm = batch_norm
+
+    def forward(self, x):
+        out = self.fc1(x)
+        if self.batch_norm:
+            out = self.bn1(out)
+        out = self.nl1(self.d1(out))
+
+        out = self.fc2(out)
+        if self.batch_norm:
+            out = self.bn2(out)
+        out = self.nl2(self.d2(out))
+
+        out = self.fc2b(out)
+        if self.batch_norm:
+            out = self.bn2b(out)
+        out = self.nl2b(self.d2b(out))
+
+        # out = self.fc2c(out)
+        # out = self.nl2c(out)
+
+        out = self.fc2d(out)
+        out = self.nl2d(out)
+
+        out = self.fc3(out)
+        return out
 
 class RadynversionNet(ReversibleGraphNet):
-    def __init__(self, inputs, outputs, zeroPadding=8, numInvLayers=5, dropout=0.05, minSize=None):
+    def __init__(self, inputs, outputs, zeroPadding=0, numInvLayers=5, dropout=0.00, minSize=None):
         # Determine dimensions and construct DataSchema
         inMinLength = schema_min_len(inputs, zeroPadding)
         outMinLength = schema_min_len(outputs, zeroPadding)
@@ -158,9 +217,8 @@ class RadynversionNet(ReversibleGraphNet):
 
         for i in range(numInvLayers):
             nodes.append(Node([nodes[-1].out0], rev_multiplicative_layer,
-                         {'F_class': F_fully_connected, 'clamp': 2.0,
-                          'F_args': {'dropout': dropout if i != numInvLayers - 1 else 0.0}}, name='Inv%d' % i))
-#             if (i != numInvLayers - 1) and (i % 2 == 0):
+                         {'F_class': F_fully_connected_leaky, 'clamp': 2.0,
+                          'F_args': {'dropout': 0.0}}, name='Inv%d' % i))
             if (i != numInvLayers - 1):
                 nodes.append(Node([nodes[-1].out0], permute_layer, {'seed': i}, name='Permute%d' % i))
 
@@ -179,6 +237,7 @@ class RadynversionTrainer:
             for block in mod_list.children():
                 for coeff in block.children():
                     coeff.fc3.weight.data = 1e-3*torch.randn(coeff.fc3.weight.shape)
+#                     coeff.fc3.weight.data = 1e-2*torch.randn(coeff.fc3.weight.shape)
 
         self.model.to(dev)
 
@@ -220,16 +279,18 @@ class RadynversionTrainer:
 
         lTot = 0
         miniBatchIdx = 0
-        wRevScale = min(epoch / (0.5 * self.numEpochs), 1)**3
-        noiseScale = (1 - wRevScale) * self.zerosNoiseScale
+        wRevScale = min(epoch / (0.4 * self.numEpochs), 1)**3
+#         wRevScale = 1.0
+        noiseScale = (1.0 - wRevScale) * self.zerosNoiseScale
         # noiseScale = self.zerosNoiseScale
 
         # def pad_fn(*x):
         #     # return noiseScale * torch.randn(*x)
         #     return torch.zeros(*x)
-        # pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev)
-        pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
+        pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev)
+#         pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
         randn = lambda *x: torch.randn(*x, device=self.dev)
+        losses = [0, 0, 0, 0]
 
         for x, y in self.atmosData.trainLoader:
             miniBatchIdx += 1
@@ -255,7 +316,11 @@ class RadynversionTrainer:
 
             # lForward = self.wPred * (self.loss_fit(y[:, 0], out[:, self.model.outSchema.Halpha]) + 
             #                          self.loss_fit(y[:, 1], out[:, self.model.outSchema.Ca8542]))
-            lForward = self.wPred * self.loss_fit(yzp[:, :self.model.outSchema.LatentSpace[0]], out[:, :self.model.outSchema.LatentSpace[0]])
+#             lForward = self.wPred * self.loss_fit(yzp[:, :self.model.outSchema.LatentSpace[0]], out[:, :self.model.outSchema.LatentSpace[0]])
+
+            lForward = self.wPred * self.loss_fit(yzp[:, self.model.outSchema.LatentSpace[-1]+1:], 
+                                                  out[:, self.model.outSchema.LatentSpace[-1]+1:])
+            losses[0] += lForward.data.item() / self.wPred
 
             
             outLatentGradOnly = torch.cat((out[:, self.model.outSchema.Halpha].data, 
@@ -267,7 +332,10 @@ class RadynversionTrainer:
                                         yzp[:, self.model.outSchema.LatentSpace]), 
                                        dim=1)
             
-            lForward += self.wLatent * self.loss_latent(outLatentGradOnly, unpaddedTarget)
+            lForward2 = self.wLatent * self.loss_latent(outLatentGradOnly, unpaddedTarget)
+            losses[1] += lForward2.data.item() / self.wLatent
+            lForward += lForward2
+            
             lTot += lForward.data.item()
 
             lForward.backward()
@@ -293,7 +361,12 @@ class RadynversionTrainer:
             lBackward = self.wRev * wRevScale * self.loss_backward(outRevRand[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], 
                                                                    xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1])
 
-            lBackward += 0.5 * self.wPred * self.loss_fit(outRev, xp)
+            scale = wRevScale if wRevScale != 0 else 1.0
+            losses[2] += lBackward.data.item() / (self.wRev * scale)
+#             lBackward += 0.5 * self.wPred * self.loss_fit(outRev, xp)
+            lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev, xp)
+            losses[3] += lBackward2.data.item() / self.wPred * 2
+            lBackward += lBackward2
             lTot += lBackward.data.item()
 
             lBackward.backward()
@@ -303,7 +376,8 @@ class RadynversionTrainer:
 
             self.optim.step()
 
-        return lTot / miniBatchIdx
+        losses = [l / miniBatchIdx for l in losses]
+        return lTot / miniBatchIdx, losses
 
     def test(self, maxBatches=10):
         self.model.eval()
@@ -338,15 +412,64 @@ class RadynversionTrainer:
                 forwardError.append(f)
 
                 outBack = self.model(inpBack, rev=True)
-                b = self.loss_fit(out[:, self.model.inSchema.ne], x[:, 0]) + \
-                    self.loss_fit(out[:, self.model.inSchema.temperature], x[:, 1]) + \
-                    self.loss_fit(out[:, self.model.inSchema.vel], x[:, 2])
+#                 b = self.loss_fit(out[:, self.model.inSchema.ne], x[:, 0]) + \
+#                     self.loss_fit(out[:, self.model.inSchema.temperature], x[:, 1]) + \
+#                     self.loss_fit(out[:, self.model.inSchema.vel], x[:, 2])
+                b = self.loss_backward(outBack, inp)
                 backwardError.append(b)
         
             fE = np.mean(forwardError)
             bE = np.mean(backwardError)
 
             return fE, bE, out, outBack
+        
+    def review_mmd(self):
+        with torch.no_grad():
+            # Latent MMD
+            loadIter = iter(self.atmosData.testLoader)
+            x1, y1 = next(loadIter)
+            xp = self.model.inSchema.fill({'ne': x1[:, 0],
+                                           'temperature': x1[:, 1],
+                                           'vel': x1[:, 2]},
+                                          zero_pad_fn=torch.zeros).to(self.dev)
+            yp = self.model.outSchema.fill({'Halpha': y1[:, 0], 
+                                           'Ca8542': y1[:, 1], 
+                                           'LatentSpace': torch.randn},
+                                          zero_pad_fn=torch.zeros).to(self.dev)
+            yFor = self.model(xp)
+            yForNp = torch.cat((yFor[:, self.model.outSchema.Halpha], yFor[:, self.model.outSchema.Ca8542], yFor[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
+            ynp = torch.cat((yp[:, self.model.outSchema.Halpha], yp[:, self.model.outSchema.Ca8542], yp[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
+
+            # Backward MMD
+            xBack = self.model(yp, rev=True)
+
+            r = np.logspace(np.log10(0.5), np.log10(500), num=2000)
+            mmdValsFor = []
+            mmdValsBack = []
+            for a in r:
+                mm = mmd_multiscale_on(self.dev, alphas=[float(a)])
+                mmdValsFor.append(mm(yForNp, ynp).item())
+                mmdValsBack.append(mm(xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], xBack[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1]).item())
+
+
+            def find_new_mmd_idx(a):
+                aRev = a[::-1]
+                for i, v in enumerate(a[-2::-1]):
+                    if v < aRev[i]:
+                        return min(len(a)-i, len(a)-1)
+            mmdValsFor = np.array(mmdValsFor)
+            mmdValsBack = np.array(mmdValsBack)
+            idxFor = find_new_mmd_idx(mmdValsFor)
+            idxBack = find_new_mmd_idx(mmdValsBack)
+#             idxFor = np.searchsorted(r, 2.0) if idxFor is None else idxFor
+#             idxBack = np.searchsorted(r, 2.0) if idxBack is None else idxBack
+            idxFor = idxFor if not idxFor is None else np.searchsorted(r, 2.0)
+            idxBack = idxBack if not idxBack is None else np.searchsorted(r, 2.0)
+
+            self.loss_backward = mmd_multiscale_on(self.dev, alphas=[float(r[idxBack])])
+            self.loss_latent = mmd_multiscale_on(self.dev, alphas=[float(r[idxFor])])
+
+            return r, mmdValsFor, mmdValsBack, idxFor, idxBack
 
 
 class AtmosData:
@@ -405,7 +528,12 @@ class AtmosData:
         self.lines = lines
             
         # use the [0] the chuck the index vector away
-        self.lines = [l / torch.max(l, 1, keepdim=True)[0] for l in self.lines]
+        lineMaxs = [torch.max(l, 1, keepdim=True)[0] for l in self.lines]
+        lineMaxs = torch.cat(lineMaxs, dim=1)
+        lineMaxs = torch.max(lineMaxs, 1, keepdim=True)[0]
+        
+        self.lines = [l / lineMaxs for l in self.lines]
+#         self.lines = [l / torch.max(l, 1, keepdim=True)[0] for l in self.lines]
         self.z = data['z'].float()
             
     def split_data_and_init_loaders(self, batchSize, padLines=False, linePadValue='Edge', zeroPadding=0, testingFraction=0.2):
