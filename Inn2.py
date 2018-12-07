@@ -242,7 +242,7 @@ class RadynversionTrainer:
         self.model.to(dev)
 
     def training_params(self, numEpochs, lr=2e-3, miniBatchesPerEpoch=20, metaEpoch=12, miniBatchSize=None, 
-                        l2Reg=2e-5, wPred=1500, wLatent=300, wRev=500, zerosNoiseScale=5e-3, 
+                        l2Reg=2e-5, wPred=1500, wLatent=300, wRev=500, zerosNoiseScale=5e-3, fadeIn=True,
                         loss_fit=mse, loss_latent=None, loss_backward=None):
         if miniBatchSize is None:
             miniBatchSize = self.atmosData.batchSize
@@ -264,6 +264,7 @@ class RadynversionTrainer:
                                                          step_size=metaEpoch,
                                                          gamma=gamma)
         self.wPred = wPred
+        self.fadeIn = fadeIn
         self.wLatent = wLatent
         self.wRev = wRev
         self.zerosNoiseScale = zerosNoiseScale
@@ -279,16 +280,15 @@ class RadynversionTrainer:
 
         lTot = 0
         miniBatchIdx = 0
-        wRevScale = min(epoch / (0.4 * self.numEpochs), 1)**3
-#         wRevScale = 1.0
+        if self.fadeIn:
+            wRevScale = min(epoch / (0.4 * self.numEpochs), 1)**3
+        else:
+            wRevScale = 1.0
         noiseScale = (1.0 - wRevScale) * self.zerosNoiseScale
         # noiseScale = self.zerosNoiseScale
 
-        # def pad_fn(*x):
-        #     # return noiseScale * torch.randn(*x)
-        #     return torch.zeros(*x)
         pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev)
-#         pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
+#         zeros = lambda *x: torch.zeros(*x, device=self.dev)
         randn = lambda *x: torch.randn(*x, device=self.dev)
         losses = [0, 0, 0, 0]
 
@@ -386,13 +386,16 @@ class RadynversionTrainer:
         backwardError = []
 
         batchIdx = 0
+        
+        if maxBatches == -1:
+            maxBatches = len(self.atmosData.testLoader)
 
         pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
         randn = lambda *x: torch.randn(*x, device=self.dev)
         with torch.no_grad():
             for x, y in self.atmosData.testLoader:
                 batchIdx += 1
-                if batchIdx >= maxBatches:
+                if batchIdx > maxBatches:
                     break
 
                 x, y = x.to(self.dev), y.to(self.dev)
@@ -427,6 +430,7 @@ class RadynversionTrainer:
         with torch.no_grad():
             # Latent MMD
             loadIter = iter(self.atmosData.testLoader)
+            # This is fine and doesn't load the first batch in testLoader every time, as shuffle=True
             x1, y1 = next(loadIter)
             xp = self.model.inSchema.fill({'ne': x1[:, 0],
                                            'temperature': x1[:, 1],
@@ -536,7 +540,7 @@ class AtmosData:
 #         self.lines = [l / torch.max(l, 1, keepdim=True)[0] for l in self.lines]
         self.z = data['z'].float()
             
-    def split_data_and_init_loaders(self, batchSize, padLines=False, linePadValue='Edge', zeroPadding=0, testingFraction=0.2):
+    def split_data_and_init_loaders(self, batchSize, splitSeed=41, padLines=False, linePadValue='Edge', zeroPadding=0, testingFraction=0.2):
         self.atmosIn = torch.stack([self.ne, self.temperature, self.vel]).permute(1, 0, 2)
         self.batchSize = batchSize
 
@@ -570,7 +574,7 @@ class AtmosData:
             self.lineOut = torch.stack([self.lines[0], self.lines[1]]).permute(1, 0, 2)
 
         indices = np.arange(self.atmosIn.shape[0])
-        np.random.shuffle(indices)
+        np.random.RandomState(seed=splitSeed).shuffle(indices)
 
         # split off 20% for testing
         maxIdx = int(self.atmosIn.shape[0] * (1.0 - testingFraction)) + 1
