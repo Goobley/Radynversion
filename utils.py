@@ -5,6 +5,8 @@ from scipy.interpolate import interp1d
 import torch
 import matplotlib.pyplot as plt
 
+__all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
+
 def create_model(filename,dev):
     '''
     A function to load the model to perform inversions on unseen data. This function also loads the height profile and wavelength grids from RADYN.
