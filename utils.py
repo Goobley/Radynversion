@@ -214,6 +214,8 @@ def inversion_plots(results,batch_size,z,ca_data,ha_data):
     ax[1,1].set_title(r"Ca II 8542$\AA{}$")
     ax[1,1].set_ylabel("Normalised Intensity")
     ax[1,1].set_xlabel(r"Wavelength $\AA{}$")
+    x_min, x_max = ax[1,1].get_xlim()
+    ax[1,1].set_xticks(np.round(np.linspace(x_min,x_max,6),2))
     ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
     ax[0,0].set_xlabel("Height [cm]")
     ax[0,0].set_ylim(8,15)
