@@ -5,6 +5,8 @@ from scipy.interpolate import interp1d
 import torch
 import matplotlib.pyplot as plt
 from skimage.draw import line_aa
+import matplotlib as mpl
+import sunpy.cm as cm
 
 __all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
 
@@ -168,27 +170,25 @@ def inversion(model,dev,ca_data,ha_data,batch_size):
         vel = inverse_velocity_conversion(x_out[:,model.inSchema.vel])
 
         results = {
-            "Halpha" : y_round_trip[:,model.outSchema.Halpha],
-            "Ca8542" : y_round_trip[:,model.outSchema.Ca8542],
-            "ne" : x_out[:,model.inSchema.ne],
-            "temperature" : x_out[:,model.inSchema.temperature],
-            "vel" : vel,
-            "Halpha_true" : yz[0,model.outSchema.Halpha],
-            "Ca8542_true" : yz[0,model.outSchema.Ca8542]
+            "Halpha" : y_round_trip[:,model.outSchema.Halpha].cpu().numpy(),
+            "Ca8542" : y_round_trip[:,model.outSchema.Ca8542].cpu().numpy(),
+            "ne" : x_out[:,model.inSchema.ne].cpu().numpy(),
+            "temperature" : x_out[:,model.inSchema.temperature].cpu().numpy(),
+            "vel" : vel.cpu().numpy(),
+            "Halpha_true" : yz[0,model.outSchema.Halpha].cpu().numpy(),
+            "Ca8542_true" : yz[0,model.outSchema.Ca8542].cpu().numpy()
         }
 
         return results
 
-def inversion_plots(results,batch_size,z,ca_data,ha_data):
+def inversion_plots(results,z,ca_data,ha_data):
     '''
     A function to plot the results of the inversions.
 
     Parameters
     ----------
     results : dict
-        The results from the inversions.
-    batch_size : int
-        The number of samples to take from the latent space.
+        The results from the inversions.m the latent space.
     z : torch.Tensor
         The height profiles of the RADYN grid.
     ca_data : list
@@ -197,19 +197,12 @@ def inversion_plots(results,batch_size,z,ca_data,ha_data):
         A concatenated list of the hydrogen wavelengths and intensities.
     '''
 
-    a = max(1.0 / batch_size, 0.002)
     fig, ax = plt.subplots(2,2,figsize=(10,10))
     ax2 = ax[0,0].twinx()
-    # for i in range(batch_size):
-    #     ax[0,0].plot(z.cpu().numpy(),results["ne"][i].cpu().numpy(),c="C3",alpha=a)
-    #     ax2.plot(z.cpu().numpy(),results["temperature"][i].cpu().numpy(),c="C1",alpha=a)
-    #     ax[0,1].plot(z.cpu().numpy(),results["vel"][i].cpu().numpy(),c="C2",alpha=a)
-    #     ax[1,0].plot(ha_data[0],results["Halpha"][i].cpu().numpy(),c="k",alpha=a)
-    #     ax[1,1].plot(ca_data[0],results["Ca8542"][i].cpu().numpy(),c="k",alpha=a)
 
-    im_ne,extent_ne = acc_lines(z.cpu().numpy(),results["ne"].cpu().numpy(),200)
+    im_ne,extent_ne = acc_lines(z.cpu().numpy(),results["ne"],200,y_max=15,y_min=8)
     im_ne /= im_ne.max()
-    im_temp, extent_temp = acc_lines(z.cpu().numpy(),results["temperature"].cpu().numpy(),200)
+    im_temp, extent_temp = acc_lines(z.cpu().numpy(),results["temperature"],200,y_max=8,y_min=3)
     im_temp /= im_temp.max()
 
     alpha = np.zeros_like(im_ne)
@@ -217,15 +210,32 @@ def inversion_plots(results,batch_size,z,ca_data,ha_data):
     alpha[im_temp != 0] += im_temp[im_temp != 0]
 
     im = np.stack([im_ne,im_temp,np.zeros_like(im_ne),alpha]).transpose(1,2,0)
+    im = np.clip(im,0,1)
+
+    vel_max = 1.1*np.max(np.median(results["vel"],axis=0))
+    vel_min = np.min(np.median(results["vel"],axis=0))
+    vel_min = np.sign(vel_min)*np.abs(vel_min)*1.1
+    im_vel,extent_vel = acc_lines(z.cpu().numpy(),results["vel"],200,y_max=vel_max,y_min=vel_min)
+    im_vel /= im_vel.max()
+    im_vel[im_vel<=0.02] = np.nan
+
+    im_ca, extent_ca = acc_lines(ca_data[0],results["Ca8542"],200)
+    im_ca /= im_ca.max()
+    im_ha, extent_ha = acc_lines(ha_data[0],results["Halpha"],200)
+    im_ha /= im_ha.max()
+    
 
     ax[0,0].imshow(im,extent=extent_ne,aspect="auto",origin="bottom")
-    ax2.imshow(im_temp,extent=extent_temp,aspect="auto",origin="bottom",alpha=0)
-
-    ax[1,0].plot(ha_data[0],results["Halpha_true"].cpu().numpy(),"--",color="C3")
+    # ax2.imshow(im_temp,extent=extent_temp,aspect="auto",origin="bottom",alpha=0)
+    ax2.set_ylim(extent_temp[2],extent_temp[3])
+    ax[0,1].imshow(im_vel,cmap="Purples",extent=extent_vel,aspect="auto",origin="bottom")
+    ax[1,0].imshow(im_ha,cmap="gray_r",extent=extent_ha,aspect="auto",origin="bottom")
+    ax[1,0].plot(ha_data[0],results["Halpha_true"],"+",color="C3")
     ax[1,0].set_title(r"H$\alpha$")
     ax[1,0].set_ylabel("Normalised Intensity")
     ax[1,0].set_xlabel(r"Wavelength $\AA{}$")
-    ax[1,1].plot(ca_data[0],results["Ca8542_true"].cpu().numpy(),"--",color="C3")
+    ax[1,1].imshow(im_ca,cmap="gray_r",extent=extent_ca,aspect="auto",origin="bottom")
+    ax[1,1].plot(ca_data[0],results["Ca8542_true"],"+",color="C3")
     ax[1,1].set_title(r"Ca II 8542$\AA{}$")
     ax[1,1].set_ylabel("Normalised Intensity")
     ax[1,1].set_xlabel(r"Wavelength $\AA{}$")
@@ -233,8 +243,8 @@ def inversion_plots(results,batch_size,z,ca_data,ha_data):
     # ax[1,1].set_xticks(np.round(np.linspace(x_min,x_max,6),2))
     ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
     ax[0,0].set_xlabel("Height [cm]")
-    ax2.set_ylabel("T [K]",color="C1")
-    ax[0,1].set_ylabel("v [km/s]",color="C2")
+    ax2.set_ylabel("T [K]",color="C2")
+    ax[0,1].set_ylabel("v [km/s]",color="#53258E")
     ax[0,1].set_xlabel("Height [cm]")
 
     fig.tight_layout()
@@ -301,7 +311,8 @@ def acc_lines(x,y,h,y_min=None,y_max=None):
 
     #Assume first part of grid is uniform
     x_uniform_step = x[1] - x[0]
-    w = int(np.ceil((x[-1] - x[0])/x_uniform_step)) + 1
+    w = int((x[-1] - x[0])/x_uniform_step)+1
+    print(w)
     x_w_idxs = np.array([int(np.floor((x[i]-x[0])/x_uniform_step + 0.5)) for i in range(x.shape[0])])
 
     y_bin_width = (y_max - y_min) / (h - 1)
@@ -317,12 +328,13 @@ def acc_lines(x,y,h,y_min=None,y_max=None):
             y_idx_start = int(np.floor((y_val_start - y_min) / y_bin_width + 0.5))
             y_idx_end = int(np.floor((y_val_end - y_min) / y_bin_width + 0.5))
 
-            rr,cc,vals = line_aa(x_bin_start,y_idx_start,x_bin_end,y_idx_end)
-            #Remove ending point to avoid double counting --  but not on the last subline
-            if x_idx != x.shape[0]-2:
-                vals[-1] = 0
-            count[cc,rr] += vals
+            if 0 <= y_idx_start < h and 0<= y_idx_end < h and 0 <= x_idx < w:
+                rr,cc,vals = line_aa(x_bin_start,y_idx_start,x_bin_end,y_idx_end)
+                #Remove ending point to avoid double counting --  but not on the last subline
+                if x_idx != x.shape[0]-2:
+                    vals[-1] = 0
+                count[cc,rr] += vals
 
-    extent = [x[0] - 0.5*x_uniform_step,(w+0.5)*x_uniform_step,y_min-0.5*y_bin_width,y_max+0.5*y_bin_width]
+    extent = [x[0] - 0.5*x_uniform_step,(w+0.5)*x_uniform_step+x[0],y_min-0.5*y_bin_width,y_max+0.5*y_bin_width]
 
     return count,extent
