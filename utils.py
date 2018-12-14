@@ -4,6 +4,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 import torch
 import matplotlib.pyplot as plt
+from skimage.draw import line_aa
 
 __all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
 
@@ -199,6 +200,67 @@ def inversion_plots(results,batch_size,z,ca_data,ha_data):
     a = max(1.0 / batch_size, 0.002)
     fig, ax = plt.subplots(2,2,figsize=(10,10))
     ax2 = ax[0,0].twinx()
+    # for i in range(batch_size):
+    #     ax[0,0].plot(z.cpu().numpy(),results["ne"][i].cpu().numpy(),c="C3",alpha=a)
+    #     ax2.plot(z.cpu().numpy(),results["temperature"][i].cpu().numpy(),c="C1",alpha=a)
+    #     ax[0,1].plot(z.cpu().numpy(),results["vel"][i].cpu().numpy(),c="C2",alpha=a)
+    #     ax[1,0].plot(ha_data[0],results["Halpha"][i].cpu().numpy(),c="k",alpha=a)
+    #     ax[1,1].plot(ca_data[0],results["Ca8542"][i].cpu().numpy(),c="k",alpha=a)
+
+    im_ne,extent_ne = acc_lines(z.cpu().numpy(),results["ne"].cpu().numpy(),200)
+    im_ne /= im_ne.max()
+    im_temp, extent_temp = acc_lines(z.cpu().numpy(),results["temperature"].cpu().numpy(),200)
+    im_temp /= im_temp.max()
+
+    alpha = np.zeros_like(im_ne)
+    alpha[im_ne != 0] += im_ne[im_ne != 0]
+    alpha[im_temp != 0] += im_temp[im_temp != 0]
+
+    im = np.stack([im_ne,im_temp,np.zeros_like(im_ne),alpha]).transpose(1,2,0)
+
+    ax[0,0].imshow(im,extent=extent_ne,aspect="auto",origin="bottom")
+    ax2.imshow(im_temp,extent=extent_temp,aspect="auto",origin="bottom",alpha=0)
+
+    ax[1,0].plot(ha_data[0],results["Halpha_true"].cpu().numpy(),"--",color="C3")
+    ax[1,0].set_title(r"H$\alpha$")
+    ax[1,0].set_ylabel("Normalised Intensity")
+    ax[1,0].set_xlabel(r"Wavelength $\AA{}$")
+    ax[1,1].plot(ca_data[0],results["Ca8542_true"].cpu().numpy(),"--",color="C3")
+    ax[1,1].set_title(r"Ca II 8542$\AA{}$")
+    ax[1,1].set_ylabel("Normalised Intensity")
+    ax[1,1].set_xlabel(r"Wavelength $\AA{}$")
+    # x_min, x_max = ax[1,1].get_xlim()
+    # ax[1,1].set_xticks(np.round(np.linspace(x_min,x_max,6),2))
+    ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
+    ax[0,0].set_xlabel("Height [cm]")
+    ax2.set_ylabel("T [K]",color="C1")
+    ax[0,1].set_ylabel("v [km/s]",color="C2")
+    ax[0,1].set_xlabel("Height [cm]")
+
+    fig.tight_layout()
+    fig.canvas.draw()
+
+def inversion_plots_backup(results,batch_size,z,ca_data,ha_data):
+    '''
+    A function to plot the results of the inversions.
+
+    Parameters
+    ----------
+    results : dict
+        The results from the inversions.
+    batch_size : int
+        The number of samples to take from the latent space.
+    z : torch.Tensor
+        The height profiles of the RADYN grid.
+    ca_data : list
+        A concatenated list of the calcium wavelengths and intensities.
+    ha_data : list
+        A concatenated list of the hydrogen wavelengths and intensities.
+    '''
+
+    a = max(1.0 / batch_size, 0.002)
+    fig, ax = plt.subplots(2,2,figsize=(10,10))
+    ax2 = ax[0,0].twinx()
     for i in range(batch_size):
         ax[0,0].plot(z.cpu().numpy(),results["ne"][i].cpu().numpy(),c="C3",alpha=a)
         ax2.plot(z.cpu().numpy(),results["temperature"][i].cpu().numpy(),c="C1",alpha=a)
@@ -218,11 +280,49 @@ def inversion_plots(results,batch_size,z,ca_data,ha_data):
     ax[1,1].set_xticks(np.round(np.linspace(x_min,x_max,6),2))
     ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
     ax[0,0].set_xlabel("Height [cm]")
-    ax[0,0].set_ylim(8,15)
     ax2.set_ylabel("T [K]",color="C1")
-    ax2.set_ylim(3,8)
     ax[0,1].set_ylabel("v [km/s]",color="C2")
     ax[0,1].set_xlabel("Height [cm]")
 
     fig.tight_layout()
     fig.canvas.draw()
+
+def acc_lines(x,y,h,y_min=None,y_max=None):
+    '''
+    A function to create a greater than 8-bit colour density scheme for plotting the results of the inversion. This allows us to see the differences when plotting the atmospheric parameters when sampling the latent space more than 2^8 - 1 times.
+
+    For more info on this function contact c.osborne.1@research.gla.ac.uk.
+    '''
+
+    if y_min is None:
+        y_min = y.min()
+    if y_max is None:
+        y_max = y.max()
+
+    #Assume first part of grid is uniform
+    x_uniform_step = x[1] - x[0]
+    w = int(np.ceil((x[-1] - x[0])/x_uniform_step)) + 1
+    x_w_idxs = np.array([int(np.floor((x[i]-x[0])/x_uniform_step + 0.5)) for i in range(x.shape[0])])
+
+    y_bin_width = (y_max - y_min) / (h - 1)
+
+    count = np.zeros((h,w))
+
+    for line_idx in range(y.shape[0]):
+        for x_idx in range(x.shape[0]-1):
+            y_val_start = y[line_idx,x_idx]
+            y_val_end = y[line_idx,x_idx+1]
+            x_bin_start = x_w_idxs[x_idx]
+            x_bin_end = x_w_idxs[x_idx+1]
+            y_idx_start = int(np.floor((y_val_start - y_min) / y_bin_width + 0.5))
+            y_idx_end = int(np.floor((y_val_end - y_min) / y_bin_width + 0.5))
+
+            rr,cc,vals = line_aa(x_bin_start,y_idx_start,x_bin_end,y_idx_end)
+            #Remove ending point to avoid double counting --  but not on the last subline
+            if x_idx != x.shape[0]-2:
+                vals[-1] = 0
+            count[cc,rr] += vals
+
+    extent = [x[0] - 0.5*x_uniform_step,(w+0.5)*x_uniform_step,y_min-0.5*y_bin_width,y_max+0.5*y_bin_width]
+
+    return count,extent
