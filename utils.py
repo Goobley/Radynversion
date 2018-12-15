@@ -6,7 +6,7 @@ import torch
 import matplotlib.pyplot as plt
 from skimage.draw import line_aa
 import matplotlib as mpl
-import sunpy.cm as cm
+from matplotlib.colors import LogNorm, PowerNorm
 
 __all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
 
@@ -182,6 +182,41 @@ def inversion(model,dev,ca_data,ha_data,batch_size):
         return results
 
 def inversion_plots(results,z,ca_data,ha_data):
+    '''
+    A function to plot the results of the inversions.
+
+    Parameters
+    ----------
+    results : dict
+        The results from the inversions.
+    z : torch.Tensor
+        The height profiles from the RADYN grid.
+    ca_data : list
+        A concatenated list of the calcium wavelengths and intensities.
+    ha_data : list
+        A concatenated list of the hydrogen wavelengths and intensities.
+    '''
+
+    fig, ax = plt.subplots(nrows=2,ncols=2,figsize=(10,10))
+    ax2 = ax[0,0].twinx()
+
+    z_edges = [z[0] - 0.5*(z[1]-z[0])]
+    for i in range(z.shape[0]-1):
+        z_edges.append(0.5*(z[i]+z[i+1]))
+    z_edges.append(z[-1] + 0.5*(z[-1]-z[-2]))
+    ne_edges = np.linspace(8,5,num=201)
+    temp_edges = np.linspace(3,8,num=201)
+    vel_max = 1.1*np.max(np.median(results["vel"],axis=0))
+    vel_min = np.min(np.median(results["vel"],axis=0))
+    vel_min = np.sign(vel_min)*np.abs(vel_min)*1.1
+    vel_edges = np.linspace(vel_min,vel_max,num=201)
+
+    ax[0,0].hist2d(torch.cat([z]*results["ne"].shape[0]).cpu().numpy(),results["ne"].reshape((-1,)),bins=(z_edges,ne_edges),cmap="gray_r",norm=PowerNorm(0.4))
+    ax2.hist2d(torch.cat([z]*results["temperature"].shape[0]).cpu().numpy(),results["temperature"].reshape((-1,)),bins=(z_edges,temp_edges),cmap="gray_r",norm=PowerNorm(0.4))
+    ax[0,1].hist2d(torch.cat([z]*results["vel"].shape[0]).cpu().numpy(),results["vel"].reshape((-1,)),bins=(z_edges,vel_edges),cmap="gray_r",norm=PowerNorm(0.4))
+
+
+def inversion_plots_acc(results,z,ca_data,ha_data):
     '''
     A function to plot the results of the inversions.
 
