@@ -6,7 +6,7 @@ import torch
 import matplotlib.pyplot as plt
 from skimage.draw import line_aa
 import matplotlib as mpl
-import sunpy.cm as cm
+from matplotlib.colors import PowerNorm,LinearSegmentedColormap
 
 __all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
 
@@ -197,144 +197,65 @@ def inversion_plots(results,z,ca_data,ha_data):
         A concatenated list of the hydrogen wavelengths and intensities.
     '''
 
-    fig, ax = plt.subplots(2,2,figsize=(10,10))
+    fig, ax = plt.subplots(nrows=2,ncols=2,figsize=(9,7))
     ax2 = ax[0,0].twinx()
+    ca_wvls = ca_data[0]
+    ha_wvls = ha_data[0]
 
-    im_ne,extent_ne = acc_lines(z.cpu().numpy(),results["ne"],200,y_max=15,y_min=8)
-    im_ne /= im_ne.max()
-    im_temp, extent_temp = acc_lines(z.cpu().numpy(),results["temperature"],200,y_max=8,y_min=3)
-    im_temp /= im_temp.max()
-
-    alpha = np.zeros_like(im_ne)
-    alpha[im_ne != 0] += im_ne[im_ne != 0]
-    alpha[im_temp != 0] += im_temp[im_temp != 0]
-
-    im = np.stack([im_ne,im_temp,np.zeros_like(im_ne),alpha]).transpose(1,2,0)
-    im = np.clip(im,0,1)
-
-    vel_max = 1.1*np.max(np.median(results["vel"],axis=0))
+    z_edges = [z[0] - 0.5*(z[1]-z[0])]
+    for i in range(z.shape[0]-1):
+        z_edges.append(0.5*(z[i]+z[i+1]))
+    z_edges.append(z[-1] + 0.5*(z[-1]-z[-2]))
+    ca_edges = [ca_wvls[0] - 0.5*(ca_wvls[1]-ca_wvls[0])]
+    for i in range(ca_wvls.shape[0]-1):
+        ca_edges.append(0.5*(ca_wvls[i]+ca_wvls[i+1]))
+    ca_edges.append(ca_wvls[-1] + 0.5*(ca_wvls[-1]-ca_wvls[-2]))
+    ha_edges = [ha_wvls[0] - 0.5*(ha_wvls[1]-ha_wvls[0])]
+    for i in range(ha_wvls.shape[0]-1):
+        ha_edges.append(0.5*(ha_wvls[i]+ha_wvls[i+1]))
+    ha_edges.append(ha_wvls[-1] + 0.5*(ha_wvls[-1]-ha_wvls[-2]))
+    ne_edges = np.linspace(8,15,num=101)
+    temp_edges = np.linspace(3,8,num=101)
+    vel_max = 2*np.max(np.median(results["vel"],axis=0))
     vel_min = np.min(np.median(results["vel"],axis=0))
-    vel_min = np.sign(vel_min)*np.abs(vel_min)*1.1
-    im_vel,extent_vel = acc_lines(z.cpu().numpy(),results["vel"],200,y_max=vel_max,y_min=vel_min)
-    im_vel /= im_vel.max()
-    im_vel[im_vel<=0.02] = np.nan
+    vel_min = np.sign(vel_min)*np.abs(vel_min)*2
+    vel_edges = np.linspace(vel_min,vel_max,num=101)
+    ca_max = 1.1*np.max(np.max(results["Ca8542"],axis=0))
+    ca_min = 0.9*np.min(np.min(results["Ca8542"],axis=0))
+    ca_edges_int = np.linspace(ca_min,ca_max,num=101)
+    ha_max = 1.1*np.max(np.max(results["Halpha"],axis=0))
+    ha_min = 0.9*np.min(np.min(results["Halpha"],axis=0))
+    ha_edges_int = np.linspace(ha_min,ha_max,num=201)
 
-    im_ca, extent_ca = acc_lines(ca_data[0],results["Ca8542"],200)
-    im_ca /= im_ca.max()
-    im_ha, extent_ha = acc_lines(ha_data[0],results["Halpha"],200)
-    im_ha /= im_ha.max()
-    
 
-    ax[0,0].imshow(im,extent=extent_ne,aspect="auto",origin="bottom")
-    # ax2.imshow(im_temp,extent=extent_temp,aspect="auto",origin="bottom",alpha=0)
-    ax2.set_ylim(extent_temp[2],extent_temp[3])
-    ax[0,1].imshow(im_vel,cmap="Purples",extent=extent_vel,aspect="auto",origin="bottom")
-    ax[1,0].imshow(im_ha,cmap="gray_r",extent=extent_ha,aspect="auto",origin="bottom")
-    ax[1,0].plot(ha_data[0],results["Halpha_true"],"+",color="C3")
+    cmap_ne = [(51/255,187/255,238/255,0.0), (51/255, 187/255, 238/255, 1.0)]
+    colors_ne = LinearSegmentedColormap.from_list('ne', cmap_ne)
+    cmap_temp = [(238/255,119/255,51/255,0.0),(238/255,119/255,51/255,1.0)]
+    colors_temp = LinearSegmentedColormap.from_list("temp",cmap_temp)
+    cmap_vel = [(238/255,51/255,119/255,0.0),(238/255,51/255,119/255,1.0)]
+    cmap_vel = LinearSegmentedColormap.from_list("vel",cmap_vel)
+
+    ax[0,0].hist2d(torch.cat([z]*results["ne"].shape[0]).cpu().numpy(),results["ne"].reshape((-1,)),bins=(z_edges,ne_edges),cmap=colors_ne,norm=PowerNorm(0.3))
+    ax[0,0].plot(z.cpu().numpy(),np.median(results["ne"],axis=0), "--",c="k")
+    ax[0,0].set_ylabel(r"$n_{e}$ [cm$^{-3}$]",color=(51/255,187/255,238/255))
+    ax[0,0].set_xlabel("z [cm]")
+    ax2.hist2d(torch.cat([z]*results["temperature"].shape[0]).cpu().numpy(),results["temperature"].reshape((-1,)),bins=(z_edges,temp_edges),cmap=colors_temp,norm=PowerNorm(0.3))
+    ax2.plot(z.cpu().numpy(),np.median(results["temperature"],axis=0),"--",c="k")
+    ax2.set_ylabel("T [K]",color=(238/255,119/255,51/255))
+    ax[0,1].hist2d(torch.cat([z]*results["vel"].shape[0]).cpu().numpy(),results["vel"].reshape((-1,)),bins=(z_edges,vel_edges),cmap=cmap_vel,norm=PowerNorm(0.3))
+    ax[0,1].plot(z.cpu().numpy(),np.median(results["vel"],axis=0),"--",c="k")
+    ax[0,1].set_ylabel(r"v [kms$^{-1}$]",color=(238/255,51/255,119/255))
+    ax[0,1].set_xlabel("z [cm]")
+    ax[1,0].plot(ha_data[0],results["Halpha_true"],"--")
+    ax[1,0].hist2d(np.concatenate([ha_wvls]*results["Halpha"].shape[0]),results["Halpha"].reshape((-1,)),bins=(ha_edges,ha_edges_int),cmap="gray_r",norm=PowerNorm(0.3))
     ax[1,0].set_title(r"H$\alpha$")
     ax[1,0].set_ylabel("Normalised Intensity")
-    ax[1,0].set_xlabel(r"Wavelength $\AA{}$")
-    ax[1,1].imshow(im_ca,cmap="gray_r",extent=extent_ca,aspect="auto",origin="bottom")
-    ax[1,1].plot(ca_data[0],results["Ca8542_true"],"+",color="C3")
+    ax[1,0].set_xlabel(r"Wavelength [$\AA{}$]")
+    ax[1,0].xaxis.set_major_locator(plt.MaxNLocator(5))
+    ax[1,1].hist2d(np.concatenate([ca_wvls]*results["Ca8542"].shape[0]),results["Ca8542"].reshape((-1,)),bins=(ca_edges,ca_edges_int),cmap="gray_r",norm=PowerNorm(0.3))
     ax[1,1].set_title(r"Ca II 8542$\AA{}$")
-    ax[1,1].set_ylabel("Normalised Intensity")
-    ax[1,1].set_xlabel(r"Wavelength $\AA{}$")
-    # x_min, x_max = ax[1,1].get_xlim()
-    # ax[1,1].set_xticks(np.round(np.linspace(x_min,x_max,6),2))
-    ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
-    ax[0,0].set_xlabel("Height [cm]")
-    ax2.set_ylabel("T [K]",color="C2")
-    ax[0,1].set_ylabel("v [km/s]",color="#53258E")
-    ax[0,1].set_xlabel("Height [cm]")
+    ax[1,1].plot(ca_data[0],results["Ca8542_true"],"--")
+    ax[1,1].set_xlabel(r"Wavelength [$\AA{}$]")
+    ax[1,1].xaxis.set_major_locator(plt.MaxNLocator(5))
 
     fig.tight_layout()
-    fig.canvas.draw()
-
-def inversion_plots_backup(results,batch_size,z,ca_data,ha_data):
-    '''
-    A function to plot the results of the inversions.
-
-    Parameters
-    ----------
-    results : dict
-        The results from the inversions.
-    batch_size : int
-        The number of samples to take from the latent space.
-    z : torch.Tensor
-        The height profiles of the RADYN grid.
-    ca_data : list
-        A concatenated list of the calcium wavelengths and intensities.
-    ha_data : list
-        A concatenated list of the hydrogen wavelengths and intensities.
-    '''
-
-    a = max(1.0 / batch_size, 0.002)
-    fig, ax = plt.subplots(2,2,figsize=(10,10))
-    ax2 = ax[0,0].twinx()
-    for i in range(batch_size):
-        ax[0,0].plot(z.cpu().numpy(),results["ne"][i].cpu().numpy(),c="C3",alpha=a)
-        ax2.plot(z.cpu().numpy(),results["temperature"][i].cpu().numpy(),c="C1",alpha=a)
-        ax[0,1].plot(z.cpu().numpy(),results["vel"][i].cpu().numpy(),c="C2",alpha=a)
-        ax[1,0].plot(ha_data[0],results["Halpha"][i].cpu().numpy(),c="k",alpha=a)
-        ax[1,1].plot(ca_data[0],results["Ca8542"][i].cpu().numpy(),c="k",alpha=a)
-
-    ax[1,0].plot(ha_data[0],results["Halpha_true"].cpu().numpy(),"--",color="C3")
-    ax[1,0].set_title(r"H$\alpha$")
-    ax[1,0].set_ylabel("Normalised Intensity")
-    ax[1,0].set_xlabel(r"Wavelength $\AA{}$")
-    ax[1,1].plot(ca_data[0],results["Ca8542_true"].cpu().numpy(),"--",color="C3")
-    ax[1,1].set_title(r"Ca II 8542$\AA{}$")
-    ax[1,1].set_ylabel("Normalised Intensity")
-    ax[1,1].set_xlabel(r"Wavelength $\AA{}$")
-    x_min, x_max = ax[1,1].get_xlim()
-    ax[1,1].set_xticks(np.round(np.linspace(x_min,x_max,6),2))
-    ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
-    ax[0,0].set_xlabel("Height [cm]")
-    ax2.set_ylabel("T [K]",color="C1")
-    ax[0,1].set_ylabel("v [km/s]",color="C2")
-    ax[0,1].set_xlabel("Height [cm]")
-
-    fig.tight_layout()
-    fig.canvas.draw()
-
-def acc_lines(x,y,h,y_min=None,y_max=None):
-    '''
-    A function to create a greater than 8-bit colour density scheme for plotting the results of the inversion. This allows us to see the differences when plotting the atmospheric parameters when sampling the latent space more than 2^8 - 1 times.
-
-    For more info on this function contact c.osborne.1@research.gla.ac.uk.
-    '''
-
-    if y_min is None:
-        y_min = y.min()
-    if y_max is None:
-        y_max = y.max()
-
-    #Assume first part of grid is uniform
-    x_uniform_step = x[1] - x[0]
-    w = int((x[-1] - x[0])/x_uniform_step)+1
-    print(w)
-    x_w_idxs = np.array([int(np.floor((x[i]-x[0])/x_uniform_step + 0.5)) for i in range(x.shape[0])])
-
-    y_bin_width = (y_max - y_min) / (h - 1)
-
-    count = np.zeros((h,w))
-
-    for line_idx in range(y.shape[0]):
-        for x_idx in range(x.shape[0]-1):
-            y_val_start = y[line_idx,x_idx]
-            y_val_end = y[line_idx,x_idx+1]
-            x_bin_start = x_w_idxs[x_idx]
-            x_bin_end = x_w_idxs[x_idx+1]
-            y_idx_start = int(np.floor((y_val_start - y_min) / y_bin_width + 0.5))
-            y_idx_end = int(np.floor((y_val_end - y_min) / y_bin_width + 0.5))
-
-            if 0 <= y_idx_start < h and 0<= y_idx_end < h and 0 <= x_idx < w:
-                rr,cc,vals = line_aa(x_bin_start,y_idx_start,x_bin_end,y_idx_end)
-                #Remove ending point to avoid double counting --  but not on the last subline
-                if x_idx != x.shape[0]-2:
-                    vals[-1] = 0
-                count[cc,rr] += vals
-
-    extent = [x[0] - 0.5*x_uniform_step,(w+0.5)*x_uniform_step+x[0],y_min-0.5*y_bin_width,y_max+0.5*y_bin_width]
-
-    return count,extent
