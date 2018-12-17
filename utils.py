@@ -181,7 +181,7 @@ def inversion(model,dev,ca_data,ha_data,batch_size):
 
         return results
 
-def inversion_plots(results,z,ca_data,ha_data):
+def inversion_plots_acc(results,z,ca_data,ha_data):
     '''
     A function to plot the results of the inversions.
 
