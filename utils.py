@@ -259,3 +259,13 @@ def inversion_plots_acc(results,z,ca_data,ha_data):
     ax[1,1].xaxis.set_major_locator(plt.MaxNLocator(5))
 
     fig.tight_layout()
+
+def integrated_intensity(idx_range,intensity_vector):
+    total = 0
+    for idx in idx_range:
+        total += intensity_vector[idx]
+    
+return total / len(idx_range)
+
+def intensity_ratio(blue_intensity,red_intensity):
+    return blue_intensity / red_intensity
