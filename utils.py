@@ -4,6 +4,9 @@ import numpy as np
 from scipy.interpolate import interp1d
 import torch
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+from matplotlib.colors import PowerNorm,LinearSegmentedColormap
+import matplotlib.ticker
 
 __all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
 
@@ -24,10 +27,6 @@ def create_model(filename,dev):
         The model with the loaded trained weights ready to do testing.
     checkpoint["z"] : torch.Tensor
         The height profile from the RADYN grid.
-    checkpoint["wls"][0] : torch.Tensor
-        The H alpha wavelength points from the RADYN grid.
-    checkpoint["wls][1] : torch.Tensor
-        The Ca II 8542 wavelength points from the RADYN grid.
     '''
 
     if os.path.isfile(filename):
@@ -36,7 +35,7 @@ def create_model(filename,dev):
         model = RadynversionNet(inputs=checkpoint["inRepr"],outputs=checkpoint["outRepr"],minSize=384).to(dev)
         model.load_state_dict(checkpoint["state_dict"])
         print("=> loaded checkpoint '%s' (total number of epochs trained for %d)" % (filename,checkpoint["epoch"]))
-        return model, checkpoint["z"], checkpoint["wls"][0].cpu().numpy(), checkpoint["wls"][1].cpu().numpy()
+        return model, checkpoint["z"]
     else:
         print("=> no checkpoint found at '%s'" % filename)
 
@@ -167,60 +166,122 @@ def inversion(model,dev,ca_data,ha_data,batch_size):
         vel = inverse_velocity_conversion(x_out[:,model.inSchema.vel])
 
         results = {
-            "Halpha" : y_round_trip[:,model.outSchema.Halpha],
-            "Ca8542" : y_round_trip[:,model.outSchema.Ca8542],
-            "ne" : x_out[:,model.inSchema.ne],
-            "temperature" : x_out[:,model.inSchema.temperature],
-            "vel" : vel,
-            "Halpha_true" : yz[0,model.outSchema.Halpha],
-            "Ca8542_true" : yz[0,model.outSchema.Ca8542]
+            "Halpha" : y_round_trip[:,model.outSchema.Halpha].cpu().numpy(),
+            "Ca8542" : y_round_trip[:,model.outSchema.Ca8542].cpu().numpy(),
+            "ne" : x_out[:,model.inSchema.ne].cpu().numpy(),
+            "temperature" : x_out[:,model.inSchema.temperature].cpu().numpy(),
+            "vel" : vel.cpu().numpy(),
+            "Halpha_true" : yz[0,model.outSchema.Halpha].cpu().numpy(),
+            "Ca8542_true" : yz[0,model.outSchema.Ca8542].cpu().numpy()
         }
 
         return results
 
-def inversion_plots(results,batch_size,z,ca_data,ha_data):
+def inversion_plots(results,z,ca_data,ha_data):
     '''
     A function to plot the results of the inversions.
 
     Parameters
     ----------
     results : dict
-        The results from the inversions.
-    batch_size : int
-        The number of samples to take from the latent space.
+        The results from the inversions.m the latent space.
     z : torch.Tensor
-        The height profiles of the RADYN grid.
+        The height profiles of the RADYN grid.    
     ca_data : list
         A concatenated list of the calcium wavelengths and intensities.
     ha_data : list
         A concatenated list of the hydrogen wavelengths and intensities.
     '''
 
-    a = max(1.0 / batch_size, 0.002)
-    fig, ax = plt.subplots(2,2,figsize=(10,10))
+    fig, ax = plt.subplots(nrows=2,ncols=2,figsize=(9,7),constrained_layout=True)
     ax2 = ax[0,0].twinx()
-    for i in range(batch_size):
-        ax[0,0].plot(z.cpu().numpy(),results["ne"][i].cpu().numpy(),c="C3",alpha=a)
-        ax2.plot(z.cpu().numpy(),results["temperature"][i].cpu().numpy(),c="C1",alpha=a)
-        ax[0,1].plot(z.cpu().numpy(),results["vel"][i].cpu().numpy(),c="C2",alpha=a)
-        ax[1,0].plot(ha_data[0],results["Halpha"][i].cpu().numpy(),c="k",alpha=a)
-        ax[1,1].plot(ca_data[0],results["Ca8542"][i].cpu().numpy(),c="k",alpha=a)
+    ca_wvls = ca_data[0]
+    ha_wvls = ha_data[0]
 
-    ax[1,0].plot(ha_data[0],results["Halpha_true"].cpu().numpy(),"--",color="C3")
+    z_edges = [z[0] - 0.5*(z[1]-z[0])]
+    for i in range(z.shape[0]-1):
+        z_edges.append(0.5*(z[i]+z[i+1]))
+    z_edges.append(z[-1] + 0.5*(z[-1]-z[-2]))
+    ca_edges = [ca_wvls[0] - 0.5*(ca_wvls[1]-ca_wvls[0])]
+    for i in range(ca_wvls.shape[0]-1):
+        ca_edges.append(0.5*(ca_wvls[i]+ca_wvls[i+1]))
+    ca_edges.append(ca_wvls[-1] + 0.5*(ca_wvls[-1]-ca_wvls[-2]))
+    ha_edges = [ha_wvls[0] - 0.5*(ha_wvls[1]-ha_wvls[0])]
+    for i in range(ha_wvls.shape[0]-1):
+        ha_edges.append(0.5*(ha_wvls[i]+ha_wvls[i+1]))
+    ha_edges.append(ha_wvls[-1] + 0.5*(ha_wvls[-1]-ha_wvls[-2]))
+    ne_edges = np.linspace(8,15,num=101)
+    temp_edges = np.linspace(3,8,num=101)
+    vel_max = 2*np.max(np.median(results["vel"],axis=0))
+    vel_min = np.min(np.median(results["vel"],axis=0))
+    vel_min = np.sign(vel_min)*np.abs(vel_min)*2
+    vel_edges = np.linspace(vel_min,vel_max,num=101)
+    ca_max = 1.1*np.max(np.max(results["Ca8542"],axis=0))
+    ca_min = 0.9*np.min(np.min(results["Ca8542"],axis=0))
+    ca_edges_int = np.linspace(ca_min,ca_max,num=101)
+    ha_max = 1.1*np.max(np.max(results["Halpha"],axis=0))
+    ha_min = 0.9*np.min(np.min(results["Halpha"],axis=0))
+    ha_edges_int = np.linspace(ha_min,ha_max,num=201)
+
+
+    cmap_ne = [(51/255,187/255,238/255,0.0), (51/255, 187/255, 238/255, 1.0)]
+    colors_ne = LinearSegmentedColormap.from_list('ne', cmap_ne)
+    cmap_temp = [(238/255,119/255,51/255,0.0),(238/255,119/255,51/255,1.0)]
+    colors_temp = LinearSegmentedColormap.from_list("temp",cmap_temp)
+    cmap_vel = [(238/255,51/255,119/255,0.0),(238/255,51/255,119/255,1.0)]
+    cmap_vel = LinearSegmentedColormap.from_list("vel",cmap_vel)
+
+    ax[0,0].hist2d(torch.cat([z]*results["ne"].shape[0]).cpu().numpy(),results["ne"].reshape((-1,)),bins=(z_edges,ne_edges),cmap=colors_ne,norm=PowerNorm(0.3))
+    ax[0,0].plot(z.cpu().numpy(),np.median(results["ne"],axis=0), "--",c="k")
+    ax[0,0].set_ylabel(r"log $n_{e}$ [cm$^{-3}$]",color=(51/255,187/255,238/255))
+    ax[0,0].set_xlabel("z [cm]")
+    ax[0,0].xaxis.set_major_formatter(oom_formatter(8))
+    ax2.hist2d(torch.cat([z]*results["temperature"].shape[0]).cpu().numpy(),results["temperature"].reshape((-1,)),bins=(z_edges,temp_edges),cmap=colors_temp,norm=PowerNorm(0.3))
+    ax2.plot(z.cpu().numpy(),np.median(results["temperature"],axis=0),"--",c="k")
+    ax2.set_ylabel("log T [K]",color=(238/255,119/255,51/255))
+    ax[0,1].hist2d(torch.cat([z]*results["vel"].shape[0]).cpu().numpy(),results["vel"].reshape((-1,)),bins=(z_edges,vel_edges),cmap=cmap_vel,norm=PowerNorm(0.3))
+    ax[0,1].plot(z.cpu().numpy(),np.median(results["vel"],axis=0),"--",c="k")
+    ax[0,1].set_ylabel(r"v [kms$^{-1}$]",color=(238/255,51/255,119/255))
+    ax[0,1].set_xlabel("z [cm]")
+    ax[0,1].xaxis.set_major_formatter(oom_formatter(8))
+    ax[1,0].plot(ha_data[0],results["Halpha_true"],"--")
+    ax[1,0].hist2d(np.concatenate([ha_wvls]*results["Halpha"].shape[0]),results["Halpha"].reshape((-1,)),bins=(ha_edges,ha_edges_int),cmap="gray_r",norm=PowerNorm(0.3))
     ax[1,0].set_title(r"H$\alpha$")
     ax[1,0].set_ylabel("Normalised Intensity")
-    ax[1,0].set_xlabel(r"Wavelength $\AA{}$")
-    ax[1,1].plot(ca_data[0],results["Ca8542_true"].cpu().numpy(),"--",color="C3")
+    ax[1,0].set_xlabel(r"Wavelength [$\AA{}$]")
+    ax[1,0].xaxis.set_major_locator(plt.MaxNLocator(5))
+    ax[1,1].hist2d(np.concatenate([ca_wvls]*results["Ca8542"].shape[0]),results["Ca8542"].reshape((-1,)),bins=(ca_edges,ca_edges_int),cmap="gray_r",norm=PowerNorm(0.3))
     ax[1,1].set_title(r"Ca II 8542$\AA{}$")
-    ax[1,1].set_ylabel("Normalised Intensity")
-    ax[1,1].set_xlabel(r"Wavelength $\AA{}$")
-    ax[0,0].set_ylabel(r"$n_{e}$ [$cm^{-3}$]",color="C3")
-    ax[0,0].set_xlabel("Height [cm]")
-    ax[0,0].set_ylim(8,15)
-    ax2.set_ylabel("T [K]",color="C1")
-    ax2.set_ylim(3,8)
-    ax[0,1].set_ylabel("v [km/s]",color="C2")
-    ax[0,1].set_xlabel("Height [cm]")
+    ax[1,1].plot(ca_data[0],results["Ca8542_true"],"--")
+    ax[1,1].set_xlabel(r"Wavelength [$\AA{}$]")
+    ax[1,1].xaxis.set_major_locator(plt.MaxNLocator(5))
 
-    fig.tight_layout()
-    fig.canvas.draw()
+class oom_formatter(matplotlib.ticker.ScalarFormatter):
+    '''
+    Matplotlib formatter for changing the number of orders of magnitude displayed on an axis as well as the number of decimal points.
+
+    Adapted from: https://stackoverflow.com/questions/42656139/set-scientific-notation-with-fixed-exponent-and-significant-digits-for-multiple
+    '''
+
+    def __init__(self,order=0,fformat="%1.1f",offset=True,math_text=True):
+        self.oom = order
+        self.fformat = fformat
+        matplotlib.ticker.ScalarFormatter.__init__(self,useOffset=offset,useMathText=math_text)
+        
+    def _set_orderOfMagnitude(self,nothing):
+        self.orderOfMagnitude = self.oom
+        
+    def _set_format(self, v_min, v_max):
+        self.format = self.fformat
+        if self._useMathText:
+            self.format = "$%s$" % matplotlib.ticker._mathdefault(self.format)
+
+def integrated_intensity(idx_range,intensity_vector):
+    total = 0
+    for idx in idx_range:
+        total += intensity_vector[idx]
+    
+    return total / len(idx_range)
+
+def intensity_ratio(blue_intensity,red_intensity):
+    return blue_intensity / red_intensity

@@ -232,6 +232,7 @@ class RadynversionTrainer:
         self.model = model
         self.atmosData = atmosData
         self.dev = dev
+        self.mmFns = None
 
         for mod_list in model.children():
             for block in mod_list.children():
@@ -287,7 +288,7 @@ class RadynversionTrainer:
         noiseScale = (1.0 - wRevScale) * self.zerosNoiseScale
         # noiseScale = self.zerosNoiseScale
 
-        pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev)
+        pad_fn = lambda *x: noiseScale * torch.randn(*x, device=self.dev) #+ 10 * torch.ones(*x, device=self.dev)
 #         zeros = lambda *x: torch.zeros(*x, device=self.dev)
         randn = lambda *x: torch.randn(*x, device=self.dev)
         losses = [0, 0, 0, 0]
@@ -364,9 +365,11 @@ class RadynversionTrainer:
             scale = wRevScale if wRevScale != 0 else 1.0
             losses[2] += lBackward.data.item() / (self.wRev * scale)
 #             lBackward += 0.5 * self.wPred * self.loss_fit(outRev, xp)
-            lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev, xp)
+            lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], 
+                                                              xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1])
             losses[3] += lBackward2.data.item() / self.wPred * 2
             lBackward += lBackward2
+            
             lTot += lBackward.data.item()
 
             lBackward.backward()
@@ -390,7 +393,7 @@ class RadynversionTrainer:
         if maxBatches == -1:
             maxBatches = len(self.atmosData.testLoader)
 
-        pad_fn = lambda *x: torch.zeros(*x, device=self.dev)
+        pad_fn = lambda *x: torch.zeros(*x, device=self.dev) # 10 * torch.ones(*x, device=self.dev)
         randn = lambda *x: torch.randn(*x, device=self.dev)
         with torch.no_grad():
             for x, y in self.atmosData.testLoader:
@@ -432,14 +435,17 @@ class RadynversionTrainer:
             loadIter = iter(self.atmosData.testLoader)
             # This is fine and doesn't load the first batch in testLoader every time, as shuffle=True
             x1, y1 = next(loadIter)
+            x1, y1 = x1.to(self.dev), y1.to(self.dev)
+            pad_fn = lambda *x: torch.zeros(*x, device=self.dev) # 10 * torch.ones(*x, device=self.dev)
+            randn = lambda *x: torch.randn(*x, device=self.dev)
             xp = self.model.inSchema.fill({'ne': x1[:, 0],
                                            'temperature': x1[:, 1],
                                            'vel': x1[:, 2]},
-                                          zero_pad_fn=torch.zeros).to(self.dev)
+                                          zero_pad_fn=pad_fn)
             yp = self.model.outSchema.fill({'Halpha': y1[:, 0], 
                                            'Ca8542': y1[:, 1], 
-                                           'LatentSpace': torch.randn},
-                                          zero_pad_fn=torch.zeros).to(self.dev)
+                                           'LatentSpace': randn},
+                                          zero_pad_fn=pad_fn)
             yFor = self.model(xp)
             yForNp = torch.cat((yFor[:, self.model.outSchema.Halpha], yFor[:, self.model.outSchema.Ca8542], yFor[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
             ynp = torch.cat((yp[:, self.model.outSchema.Halpha], yp[:, self.model.outSchema.Ca8542], yp[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
@@ -450,8 +456,13 @@ class RadynversionTrainer:
             r = np.logspace(np.log10(0.5), np.log10(500), num=2000)
             mmdValsFor = []
             mmdValsBack = []
-            for a in r:
-                mm = mmd_multiscale_on(self.dev, alphas=[float(a)])
+            if self.mmFns is None:
+                self.mmFns = []
+                for a in r:
+                    mm = mmd_multiscale_on(self.dev, alphas=[float(a)])
+                    self.mmFns.append(mm)
+                    
+            for mm in self.mmFns:
                 mmdValsFor.append(mm(yForNp, ynp).item())
                 mmdValsBack.append(mm(xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], xBack[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1]).item())
 
