@@ -8,7 +8,7 @@ import matplotlib as mpl
 from matplotlib.colors import PowerNorm,LinearSegmentedColormap
 import matplotlib.ticker
 
-__all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots"]
+__all__ = ["create_model","obs_files","interp_to_radyn_grid","normalise","inversion","inversion_plots","integrated_intensity","intensity_ratio","doppler_vel","lambda_0","variance","wing_idxs","oom_formatter","delta_lambda","lambda_0_wing","interp_fine"]
 
 def create_model(filename,dev):
     '''
@@ -277,6 +277,17 @@ class oom_formatter(matplotlib.ticker.ScalarFormatter):
             self.format = "$%s$" % matplotlib.ticker._mathdefault(self.format)
 
 def integrated_intensity(idx_range,intensity_vector):
+    '''
+    A function to find the integrated intensity over a wavelength range of a spectral line.
+
+    Parameters
+    ----------
+    idx_range : range
+        The range of indices to integrate over.
+    intensity_vector : numpy.ndarray
+        The vector of spectral line intensities.
+    '''
+
     total = 0
     for idx in idx_range:
         total += intensity_vector[idx]
@@ -284,4 +295,88 @@ def integrated_intensity(idx_range,intensity_vector):
     return total / len(idx_range)
 
 def intensity_ratio(blue_intensity,red_intensity):
+    '''
+    A function that calculates the intensity ratio of two previously integrated intensities.
+    '''
+
     return blue_intensity / red_intensity
+
+def doppler_vel(l,delta_l):
+    return (delta_l / l) * 3e5 #calculates the doppler velocity in km/s
+
+def lambda_0(wvls,ints):
+    '''
+    Calculates the intensity-averaged line core.
+    '''
+
+    num = np.sum(np.multiply(ints,wvls))
+    den = np.sum(ints)
+
+    return num / den
+
+def variance(wvls,ints,l_0):
+    '''
+    Calculates the variance of the spectral line w.r.t. the intensity-averaged line core.
+    '''
+
+    num = np.sum(np.multiply(ints,(wvls-l_0)**2))
+    den = np.sum(ints)
+
+    return num / den
+
+def wing_idxs(wvls,ints,var,l_0):
+    '''
+    A function to work out the index range for the wings of a spectral line. This is working on the definition of wings that says the wings are defined as being one standard deviation away from the intensity-averaged line core.
+    '''
+
+    blue_wing_start = 0 #blue wing starts at the shortest wavelength
+    red_wing_end = wvls.shape[0] - 1 #red wing ends at the longest wavelength
+
+    blue_end_wvl = l_0 - np.sqrt(var)
+    red_start_wvl = l_0 + np.sqrt(var)
+
+    blue_wing_end = np.argmin(np.abs(wvls - blue_end_wvl))
+    red_wing_start = np.argmin(np.abs(wvls - red_start_wvl))
+
+    return range(blue_wing_start,blue_wing_end+1), range(red_wing_start,red_wing_end+1)
+
+def delta_lambda(wing_idxs,wvls):
+    '''
+    Calculates the half-width wavelength of an intensity range.
+
+    Parameters
+    ----------
+    wing_idxs : range
+        The range of the indices of the intensity region in question.
+    wvls : numpy.ndarray
+        The wavelengths corresponding to the intensity region in question.
+    '''
+
+    return len(wing_idxs)*(wvls[1] - wvls[0])/2
+
+def lambda_0_wing(wing_idxs,wvls,delta_lambda):
+    '''
+    Calculates the central wavelength of an intensity range.
+
+    Parameters
+    ----------
+    wing_idxs : range
+        The range of the indices of the intensity region in question.
+    wvls : numpy.ndarray
+        The wavelengths corresponding to the intensity region in question.
+    delta_lambda : float
+        The half-width wavelength of an intensity range.
+    '''
+
+    return wvls[list(wing_idxs)[-1]] - delta_lambda
+
+def interp_fine(spec_line):
+    '''
+    Interpolates the spectral line onto a finer grid for more accurate calculations for the wing properties.
+    '''
+
+    x, y = spec_line
+    x_new = np.linspace(x[0],x[-1],num=1001)
+    y_new = interp1d(x,y)(x_new)
+
+    return np.array([x_new,y_new])
