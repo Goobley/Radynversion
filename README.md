@@ -24,6 +24,7 @@ The two main notebooks specify their required packages. The combined requirement
 - `crisPy` ([available here](https://github.com/rhero12/crisPy))
 - `FrEIA` ([available here](https://github.com/VLL-HD/FrEIA))
 - `RadynPy` ([available here](https://github.com/Goobley/radynpy), needed for loading RADYN outputs, so essential for making your own training set, not currently required otherwise, though Radynversion will eventually be accessible as a RadynPy module).
+
 Some of these packages will also have their own requirements, but your package manager should hopefully be able to figure most of that out!
 
 Developed by Chris Osborne & John Armstrong, University of Glasgow, Astronomy and Astrophysics (2018-2019). MIT License.
