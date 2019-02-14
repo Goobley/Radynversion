@@ -364,7 +364,7 @@ class RadynversionTrainer:
 
             scale = wRevScale if wRevScale != 0 else 1.0
             losses[2] += lBackward.data.item() / (self.wRev * scale)
-            lBackward2 += 0.5 * self.wPred * self.loss_fit(outRev, xp)
+            lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev, xp)
 #             lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], 
 #                                                               xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1])
             losses[3] += lBackward2.data.item() / self.wPred * 2
@@ -424,8 +424,8 @@ class RadynversionTrainer:
                 b = self.loss_backward(outBack, inp)
                 backwardError.append(b)
         
-            fE = np.mean(forwardError)
-            bE = np.mean(backwardError)
+            fE = torch.mean(torch.stack(forwardError))
+            bE = torch.mean(torch.stack(backwardError))
 
             return fE, bE, out, outBack
         
