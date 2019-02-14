@@ -197,11 +197,13 @@ def inversion_plots(results,z,ca_data,ha_data):
     ax2 = ax[0,0].twinx()
     ca_wvls = ca_data[0]
     ha_wvls = ha_data[0]
+    z_local = z / 1e8
 
-    z_edges = [z[0] - 0.5*(z[1]-z[0])]
-    for i in range(z.shape[0]-1):
-        z_edges.append(0.5*(z[i]+z[i+1]))
-    z_edges.append(z[-1] + 0.5*(z[-1]-z[-2]))
+    z_edges = [z_local[0] - 0.5*(z_local[1]-z_local[0])]
+    for i in range(z_local.shape[0]-1):
+        z_edges.append(0.5*(z_local[i]+z_local[i+1]))
+    z_edges.append(z_local[-1] + 0.5*(z_local[-1]-z_local[-2]))
+    z_edges = [float(f) for f in z_edges]
     ca_edges = [ca_wvls[0] - 0.5*(ca_wvls[1]-ca_wvls[0])]
     for i in range(ca_wvls.shape[0]-1):
         ca_edges.append(0.5*(ca_wvls[i]+ca_wvls[i+1]))
@@ -231,19 +233,19 @@ def inversion_plots(results,z,ca_data,ha_data):
     cmap_vel = [(238/255,51/255,119/255,0.0),(238/255,51/255,119/255,1.0)]
     cmap_vel = LinearSegmentedColormap.from_list("vel",cmap_vel)
 
-    ax[0,0].hist2d(torch.cat([z]*results["ne"].shape[0]).cpu().numpy(),results["ne"].reshape((-1,)),bins=(z_edges,ne_edges),cmap=colors_ne,norm=PowerNorm(0.3))
-    ax[0,0].plot(z.cpu().numpy(),np.median(results["ne"],axis=0), "--",c="k")
+    ax[0,0].hist2d(torch.cat([z_local]*results["ne"].shape[0]).cpu().numpy(),results["ne"].reshape((-1,)),bins=(z_edges,ne_edges),cmap=colors_ne,norm=PowerNorm(0.3))
+    ax[0,0].plot(z_local.cpu().numpy(),np.median(results["ne"],axis=0), "--",c="k")
     ax[0,0].set_ylabel(r"log $n_{e}$ [cm$^{-3}$]",color=(51/255,187/255,238/255))
-    ax[0,0].set_xlabel("z [cm]")
-    ax[0,0].xaxis.set_major_formatter(oom_formatter(8))
-    ax2.hist2d(torch.cat([z]*results["temperature"].shape[0]).cpu().numpy(),results["temperature"].reshape((-1,)),bins=(z_edges,temp_edges),cmap=colors_temp,norm=PowerNorm(0.3))
-    ax2.plot(z.cpu().numpy(),np.median(results["temperature"],axis=0),"--",c="k")
+    ax[0,0].set_xlabel("z [Mm]")
+#     ax[0,0].xaxis.set_major_formatter(oom_formatter(8))
+    ax2.hist2d(torch.cat([z_local]*results["temperature"].shape[0]).cpu().numpy(),results["temperature"].reshape((-1,)),bins=(z_edges,temp_edges),cmap=colors_temp,norm=PowerNorm(0.3))
+    ax2.plot(z_local.cpu().numpy(),np.median(results["temperature"],axis=0),"--",c="k")
     ax2.set_ylabel("log T [K]",color=(238/255,119/255,51/255))
-    ax[0,1].hist2d(torch.cat([z]*results["vel"].shape[0]).cpu().numpy(),results["vel"].reshape((-1,)),bins=(z_edges,vel_edges),cmap=cmap_vel,norm=PowerNorm(0.3))
-    ax[0,1].plot(z.cpu().numpy(),np.median(results["vel"],axis=0),"--",c="k")
+    ax[0,1].hist2d(torch.cat([z_local]*results["vel"].shape[0]).cpu().numpy(),results["vel"].reshape((-1,)),bins=(z_edges,vel_edges),cmap=cmap_vel,norm=PowerNorm(0.3))
+    ax[0,1].plot(z_local.cpu().numpy(),np.median(results["vel"],axis=0),"--",c="k")
     ax[0,1].set_ylabel(r"v [kms$^{-1}$]",color=(238/255,51/255,119/255))
-    ax[0,1].set_xlabel("z [cm]")
-    ax[0,1].xaxis.set_major_formatter(oom_formatter(8))
+    ax[0,1].set_xlabel("z [Mm]")
+#     ax[0,1].xaxis.set_major_formatter(oom_formatter(8))
     ax[1,0].plot(ha_data[0],results["Halpha_true"],"--")
     ax[1,0].hist2d(np.concatenate([ha_wvls]*results["Halpha"].shape[0]),results["Halpha"].reshape((-1,)),bins=(ha_edges,ha_edges_int),cmap="gray_r",norm=PowerNorm(0.3))
     ax[1,0].set_title(r"H$\alpha$")

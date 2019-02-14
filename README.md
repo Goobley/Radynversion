@@ -6,7 +6,7 @@ Our INN is trained to learn an approximate bijective mapping between the atmosph
 
 The bijectivity of the model is assured by the building blocks of the INN, the affine coupling layers. By splitting the data into two streams, these blocks combine four arbitrarily complex non-invertible functions and apply these to the input data in a reversible manner. 
 
-This processs, and its validation are described in the paper: Osborne, Armstrong, and Fletcher (2019) `arXiv link here when public`. The code associated with this paper lives in this repository, but the Radynversion tool will in time be merged into the 
+This processs, and its validation are described in the paper: [Osborne, Armstrong, and Fletcher (2019)](https://arxiv.org/abs/1901.08626). The code associated with this paper lives in this repository, but the Radynversion tool will in time be merged into the 
 [RadynPy](https://github.com/Goobley/radynpy) python module.
 
 For an example of the model in action the `single_pixel_inversion_example.ipynb` notebook is the recommended place to start. It uses a library of functions defined in `utils.py` You will also need the model weights, which are available on the Github releases page for this project.
@@ -24,6 +24,7 @@ The two main notebooks specify their required packages. The combined requirement
 - `crisPy` ([available here](https://github.com/rhero12/crisPy))
 - `FrEIA` ([available here](https://github.com/VLL-HD/FrEIA))
 - `RadynPy` ([available here](https://github.com/Goobley/radynpy), needed for loading RADYN outputs, so essential for making your own training set, not currently required otherwise, though Radynversion will eventually be accessible as a RadynPy module).
+
 Some of these packages will also have their own requirements, but your package manager should hopefully be able to figure most of that out!
 
 Developed by Chris Osborne & John Armstrong, University of Glasgow, Astronomy and Astrophysics (2018-2019). MIT License.
