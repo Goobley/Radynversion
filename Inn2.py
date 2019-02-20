@@ -8,10 +8,13 @@ from FrEIA.modules import rev_multiplicative_layer, permute_layer
 from loss import mse, mse_tv, mmd_multiscale_on
 
 from scipy.interpolate import interp1d
+import h5py
 
 from copy import deepcopy
 from itertools import accumulate
 import pickle
+
+from sys import exit
 
 PadOp = '!!PAD'
 ZeroPadOp = '!!ZeroPadding'
@@ -128,6 +131,8 @@ class DataSchema1D:
                     if callable(entry):
                         reifiedSchema.append(entry(batchSize, s[1]))
                     else:
+                        if s[0] == 'amp' or s[0] == 't0' or s[0] == 'tau': 
+                            entry = entry.reshape(entry.shape[0],1)
                         reifiedSchema.append(entry)
         except KeyError as e:
             raise ValueError('No key present in entries to schema: ' + repr(e))
@@ -302,12 +307,11 @@ class RadynversionTrainer:
             x, y = x.to(self.dev), y.to(self.dev)
             yClean = y.clone()
 
-            xp = self.model.inSchema.fill({'ne': x[:, 0], 
-                                           'temperature': x[:, 1], 
-                                           'vel': x[:, 2]},
+            xp = self.model.inSchema.fill({'amp': x[:, 0], 
+                                           't0': x[:, 1], 
+                                           'tau': x[:, 2]},
                                           zero_pad_fn=pad_fn)
-            yzp = self.model.outSchema.fill({'Halpha': y[:, 0], 
-                                             'Ca8542': y[:, 1], 
+            yzp = self.model.outSchema.fill({'timeseries': y[:], 
                                              'LatentSpace': randn},
                                             zero_pad_fn=pad_fn)
 
@@ -324,12 +328,10 @@ class RadynversionTrainer:
             losses[0] += lForward.data.item() / self.wPred
 
             
-            outLatentGradOnly = torch.cat((out[:, self.model.outSchema.Halpha].data, 
-                                           out[:, self.model.outSchema.Ca8542].data, 
+            outLatentGradOnly = torch.cat((out[:, self.model.outSchema.timeseries].data, 
                                            out[:, self.model.outSchema.LatentSpace]), 
                                           dim=1)
-            unpaddedTarget = torch.cat((yzp[:, self.model.outSchema.Halpha], 
-                                        yzp[:, self.model.outSchema.Ca8542], 
+            unpaddedTarget = torch.cat((yzp[:, self.model.outSchema.timeseries], 
                                         yzp[:, self.model.outSchema.LatentSpace]), 
                                        dim=1)
             
@@ -341,12 +343,10 @@ class RadynversionTrainer:
 
             lForward.backward()
 
-            yzpRev = self.model.outSchema.fill({'Halpha': yClean[:, 0], 
-                                                'Ca8542': yClean[:, 1], 
+            yzpRev = self.model.outSchema.fill({'timeseries': yClean[:], 
                                                 'LatentSpace': out[:, self.model.outSchema.LatentSpace].data},
                                                zero_pad_fn=pad_fn)
-            yzpRevRand = self.model.outSchema.fill({'Halpha': yClean[:, 0], 
-                                                    'Ca8542': yClean[:, 1], 
+            yzpRevRand = self.model.outSchema.fill({'timeseries': yClean[:], 
                                                     'LatentSpace': randn},
                                                    zero_pad_fn=pad_fn)
 
@@ -359,14 +359,15 @@ class RadynversionTrainer:
             #                    outRevRand[:, self.model.inSchema.vel]),
             #                   dim=1)
             # lBackward = self.wRev * wRevScale * self.loss_backward(xBack, x.reshape(self.miniBatchSize, -1))
-            lBackward = self.wRev * wRevScale * self.loss_backward(outRevRand[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], 
-                                                                   xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1])
+            lBackward = self.wRev * wRevScale * self.loss_backward(outRevRand[:, self.model.inSchema.amp[0]:self.model.inSchema.tau[-1]+1], 
+                                                                   xp[:, self.model.inSchema.amp[0]:self.model.inSchema.tau[-1]+1])
 
             scale = wRevScale if wRevScale != 0 else 1.0
             losses[2] += lBackward.data.item() / (self.wRev * scale)
-            lBackward2 += 0.5 * self.wPred * self.loss_fit(outRev, xp)
-#             lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], 
-#                                                               xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1])
+            #TODO: may need to uncomment this
+            #lBackward2 += 0.5 * self.wPred * self.loss_fit(outRev, xp)
+            lBackward2 = 0.5 * self.wPred * self.loss_fit(outRev[:, self.model.inSchema.amp[0]:self.model.inSchema.tau[-1]+1], 
+                                                               xp[:, self.model.inSchema.amp[0]:self.model.inSchema.tau[-1]+1])
             losses[3] += lBackward2.data.item() / self.wPred * 2
             lBackward += lBackward2
             
@@ -403,18 +404,16 @@ class RadynversionTrainer:
 
                 x, y = x.to(self.dev), y.to(self.dev)
 
-                inp = self.model.inSchema.fill({'ne': x[:, 0],
-                                                'temperature': x[:, 1],
-                                                'vel': x[:, 2]},
+                inp = self.model.inSchema.fill({'amp': x[:, 0],
+                                                't0': x[:, 1],
+                                                'tau': x[:, 2]},
                                                zero_pad_fn=pad_fn)
-                inpBack = self.model.outSchema.fill({'Halpha': y[:, 0],
-                                                     'Ca8542': y[:, 1],
+                inpBack = self.model.outSchema.fill({'timeseries': y[:],
                                                      'LatentSpace': randn},
                                                     zero_pad_fn=pad_fn)
                                                     
                 out = self.model(inp)
-                f = self.loss_fit(out[:, self.model.outSchema.Halpha], y[:, 0]) + \
-                    self.loss_fit(out[:, self.model.outSchema.Ca8542], y[:, 1])
+                f = self.loss_fit(out[:, self.model.outSchema.timeseries], y[:])
                 forwardError.append(f)
 
                 outBack = self.model(inpBack, rev=True)
@@ -424,8 +423,8 @@ class RadynversionTrainer:
                 b = self.loss_backward(outBack, inp)
                 backwardError.append(b)
         
-            fE = np.mean(forwardError)
-            bE = np.mean(backwardError)
+            fE = torch.mean(torch.tensor(forwardError))
+            bE = torch.mean(torch.tensor(backwardError))
 
             return fE, bE, out, outBack
         
@@ -438,17 +437,16 @@ class RadynversionTrainer:
             x1, y1 = x1.to(self.dev), y1.to(self.dev)
             pad_fn = lambda *x: torch.zeros(*x, device=self.dev) # 10 * torch.ones(*x, device=self.dev)
             randn = lambda *x: torch.randn(*x, device=self.dev)
-            xp = self.model.inSchema.fill({'ne': x1[:, 0],
-                                           'temperature': x1[:, 1],
-                                           'vel': x1[:, 2]},
+            xp = self.model.inSchema.fill({'amp': x1[:, 0],
+                                           't0': x1[:, 1],
+                                           'tau': x1[:, 2]},
                                           zero_pad_fn=pad_fn)
-            yp = self.model.outSchema.fill({'Halpha': y1[:, 0], 
-                                           'Ca8542': y1[:, 1], 
+            yp = self.model.outSchema.fill({'timeseries': y1[:], 
                                            'LatentSpace': randn},
                                           zero_pad_fn=pad_fn)
             yFor = self.model(xp)
-            yForNp = torch.cat((yFor[:, self.model.outSchema.Halpha], yFor[:, self.model.outSchema.Ca8542], yFor[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
-            ynp = torch.cat((yp[:, self.model.outSchema.Halpha], yp[:, self.model.outSchema.Ca8542], yp[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
+            yForNp = torch.cat((yFor[:, self.model.outSchema.timeseries], yFor[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
+            ynp = torch.cat((yp[:, self.model.outSchema.timeseries], yp[:, self.model.outSchema.LatentSpace]), dim=1).to(self.dev)
 
             # Backward MMD
             xBack = self.model(yp, rev=True)
@@ -464,7 +462,7 @@ class RadynversionTrainer:
                     
             for mm in self.mmFns:
                 mmdValsFor.append(mm(yForNp, ynp).item())
-                mmdValsBack.append(mm(xp[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1], xBack[:, self.model.inSchema.ne[0]:self.model.inSchema.vel[-1]+1]).item())
+                mmdValsBack.append(mm(xp[:, self.model.inSchema.amp[0]:self.model.inSchema.tau[-1]+1], xBack[:, self.model.inSchema.amp[0]:self.model.inSchema.tau[-1]+1]).item())
 
 
             def find_new_mmd_idx(a):
@@ -488,12 +486,16 @@ class RadynversionTrainer:
 
 
 class AtmosData:
-    def __init__(self, dataLocations, resampleWl='ProfileLength'):
+    def __init__(self, dataLocations, test_split, resampleWl=None):
         if type(dataLocations) is str:
             dataLocations = [dataLocations]
 
-        with open(dataLocations[0], 'rb') as p:
-            data = pickle.load(p)
+        #with open(dataLocations[0], 'rb') as p:
+        #    data = pickle.load(p)
+        data={'pos': h5py.File(dataLocations[0], 'r')['pos'][:],
+              'labels': h5py.File(dataLocations[0], 'r')['labels'][:],
+              'x': h5py.File(dataLocations[0], 'r')['x'][:],
+              'sig': h5py.File(dataLocations[0], 'r')['sig'][:]}
 
         if len(dataLocations) > 1:
             for dataLocation in dataLocations[1:]:
@@ -512,99 +514,79 @@ class AtmosData:
                         except KeyError:
                             pass
 
-        self.temperature = torch.stack(data['temperature']).float().log10_()
-        self.ne = torch.stack(data['ne']).float().log10_()
-        vel = torch.stack(data['vel']).float() / 1e5
-        velSign = vel / vel.abs()
-        velSign[velSign != velSign] = 0
-        self.vel = velSign * (vel.abs() + 1).log10()
+        #TODO: may need to not log the training data
+        self.pos = data['pos'][:]
+        self.labels = data['labels'][:]
+        self.sig = data['sig'][:]
+        self.pos_test = data['pos'][-test_split:]
+        self.labels_test = data['labels'][-test_split:]
+        self.sig_test = data['sig'][-test_split:]
+        self.x = data['x']
+        data['pos']=data['pos'][:-test_split]
+        data['labels']=data['labels'][:-test_split]
+        self.amp = torch.tensor(data['pos'][0]).float()#.log10_()
+        self.t0 = torch.tensor(data['pos'][1]).float()#.log10_()
+        self.tau = torch.tensor(data['pos'][2]).float()#.log10()
+        self.timeseries = torch.tensor(data['labels'][:]).float()#.log10()
+        self.atmosIn=data['pos'][:]
+        self.atmosOut=data['labels'][:]
 
-        if resampleWl == 'ProfileLength':
-            resampleWl = self.ne.shape[1]
-
-        wls = [wl.float() for wl in data['wavelength']] 
-
-        if resampleWl is not None:
-            wlResample = [torch.from_numpy(np.linspace(torch.min(wl), torch.max(wl), num=resampleWl, dtype=np.float32)) for wl in wls]
-            lineResample = []
-            for lineIdx in range(len(data['lineInfo'])):
-                lineProfile = []
-                for line in data['line'][lineIdx]:
-                    interp = interp1d(wls[lineIdx], line, assume_sorted=True, kind='cubic')
-                    lineProfile.append(torch.from_numpy(interp(wlResample[lineIdx])).float())
-                lineResample.append(lineProfile)
-                
-            lines = [torch.stack(l).float() for l in lineResample]
-        else:
-            wlResample = wls
-            lines = [torch.stack(data['line'][idx]).float() for idx in range(len(wls))]
-
-        self.wls = wlResample
-        self.lines = lines
-            
-        # use the [0] the chuck the index vector away
-        lineMaxs = [torch.max(l, 1, keepdim=True)[0] for l in self.lines]
-        lineMaxs = torch.cat(lineMaxs, dim=1)
-        lineMaxs = torch.max(lineMaxs, 1, keepdim=True)[0]
-        
-        self.lines = [l / lineMaxs for l in self.lines]
-#         self.lines = [l / torch.max(l, 1, keepdim=True)[0] for l in self.lines]
-        self.z = data['z'].float()
-            
     def split_data_and_init_loaders(self, batchSize, splitSeed=41, padLines=False, linePadValue='Edge', zeroPadding=0, testingFraction=0.2):
-        self.atmosIn = torch.stack([self.ne, self.temperature, self.vel]).permute(1, 0, 2)
         self.batchSize = batchSize
 
-        if padLines and linePadValue == 'Edge':
-            lPad0Size = (self.ne.shape[1] - self.lines[0].shape[1]) // 2
-            rPad0Size = self.ne.shape[1] - self.lines[0].shape[1] - lPad0Size
-            lPad1Size = (self.ne.shape[1] - self.lines[1].shape[1]) // 2
-            rPad1Size = self.ne.shape[1] - self.lines[1].shape[1] - lPad1Size
-            if any(np.array([lPad0Size, rPad0Size, lPad1Size, rPad1Size]) <= 0):
-                raise ValueError('Cannot pad lines as they are already bigger than/same size as the profiles!')
-            lPad0 = torch.ones(self.lines[0].shape[0], lPad0Size) * self.lines[0][:, 0].unsqueeze(1)
-            rPad0 = torch.ones(self.lines[0].shape[0], rPad0Size) * self.lines[0][:, -1].unsqueeze(1)
-            lPad1 = torch.ones(self.lines[1].shape[0], lPad1Size) * self.lines[1][:, 0].unsqueeze(1)
-            rPad1 = torch.ones(self.lines[1].shape[0], rPad1Size) * self.lines[1][:, -1].unsqueeze(1)
+        #if padLines and linePadValue == 'Edge':
+        #    lPad0Size = (self.ne.shape[1] - self.lines[0].shape[1]) // 2
+        #    rPad0Size = self.ne.shape[1] - self.lines[0].shape[1] - lPad0Size
+        #    lPad1Size = (self.ne.shape[1] - self.lines[1].shape[1]) // 2
+        #    rPad1Size = self.ne.shape[1] - self.lines[1].shape[1] - lPad1Size
+        #    if any(np.array([lPad0Size, rPad0Size, lPad1Size, rPad1Size]) <= 0):
+        #        raise ValueError('Cannot pad lines as they are already bigger than/same size as the profiles!')
+        #    lPad0 = torch.ones(self.lines[0].shape[0], lPad0Size) * self.lines[0][:, 0].unsqueeze(1)
+        #    rPad0 = torch.ones(self.lines[0].shape[0], rPad0Size) * self.lines[0][:, -1].unsqueeze(1)
+        #    lPad1 = torch.ones(self.lines[1].shape[0], lPad1Size) * self.lines[1][:, 0].unsqueeze(1)
+        #    rPad1 = torch.ones(self.lines[1].shape[0], rPad1Size) * self.lines[1][:, -1].unsqueeze(1)
 
-            self.lineOut = torch.stack([torch.cat((lPad0, self.lines[0], rPad0), dim=1), torch.cat((lPad1, self.lines[1], rPad1), dim=1)]).permute(1, 0, 2)
-        elif padLines:
-            lPad0Size = (self.ne.shape[1] - self.lines[0].shape[1]) // 2
-            rPad0Size = self.ne.shape[1] - self.lines[0].shape[1] - lPad0Size
-            lPad1Size = (self.ne.shape[1] - self.lines[1].shape[1]) // 2
-            rPad1Size = self.ne.shape[1] - self.lines[1].shape[1] - lPad1Size
-            if any(np.array([lPad0Size, rPad0Size, lPad1Size, rPad1Size]) <= 0):
-                raise ValueError('Cannot pad lines as they are already bigger than/same size as the profiles!')
-            lPad0 = torch.ones(self.lines[0].shape[0], lPad0Size) * linePadValue
-            rPad0 = torch.ones(self.lines[0].shape[0], rPad0Size) * linePadValue
-            lPad1 = torch.ones(self.lines[1].shape[0], lPad1Size) * linePadValue
-            rPad1 = torch.ones(self.lines[1].shape[0], rPad1Size) * linePadValue
+        #    self.lineOut = torch.stack([torch.cat((lPad0, self.lines[0], rPad0), dim=1), torch.cat((lPad1, self.lines[1], rPad1), dim=1)]).permute(1, 0, 2)
+        #elif padLines:
+        #    lPad0Size = (self.ne.shape[1] - self.lines[0].shape[1]) // 2
+        #    rPad0Size = self.ne.shape[1] - self.lines[0].shape[1] - lPad0Size
+        #    lPad1Size = (self.ne.shape[1] - self.lines[1].shape[1]) // 2
+        #    rPad1Size = self.ne.shape[1] - self.lines[1].shape[1] - lPad1Size
+        #    if any(np.array([lPad0Size, rPad0Size, lPad1Size, rPad1Size]) <= 0):
+        #        raise ValueError('Cannot pad lines as they are already bigger than/same size as the profiles!')
+        #    lPad0 = torch.ones(self.lines[0].shape[0], lPad0Size) * linePadValue
+        #    rPad0 = torch.ones(self.lines[0].shape[0], rPad0Size) * linePadValue
+        #    lPad1 = torch.ones(self.lines[1].shape[0], lPad1Size) * linePadValue
+        #    rPad1 = torch.ones(self.lines[1].shape[0], rPad1Size) * linePadValue
 
-            self.lineOut = torch.stack([torch.cat((lPad0, self.lines[0], rPad0), dim=1), torch.cat((lPad1, self.lines[1], rPad1), dim=1)]).permute(1, 0, 2)
-        else:
-            self.lineOut = torch.stack([self.lines[0], self.lines[1]]).permute(1, 0, 2)
+        #    self.lineOut = torch.stack([torch.cat((lPad0, self.lines[0], rPad0), dim=1), torch.cat((lPad1, self.lines[1], rPad1), dim=1)]).permute(1, 0, 2)
+        #else:
+        #    self.lineOut = torch.stack([self.lines[0], self.lines[1]]).permute(1, 0, 2)
 
-        indices = np.arange(self.atmosIn.shape[0])
-        np.random.RandomState(seed=splitSeed).shuffle(indices)
+        #indices = np.arange(self.atmosIn.shape[0])
+        #np.random.RandomState(seed=splitSeed).shuffle(indices)
 
         # split off 20% for testing
-        maxIdx = int(self.atmosIn.shape[0] * (1.0 - testingFraction)) + 1
-        if zeroPadding != 0:
-            trainIn = torch.cat((self.atmosIn[indices][:maxIdx], torch.zeros(maxIdx, self.atmosIn.shape[1], zeroPadding)), dim=2)
-            trainOut = torch.cat((self.lineOut[indices][:maxIdx], torch.zeros(maxIdx, self.lineOut.shape[1], zeroPadding)), dim=2)
-            testIn = torch.cat((self.atmosIn[indices][maxIdx:], torch.zeros(self.atmosIn.shape[0] - maxIdx, self.atmosIn.shape[1], zeroPadding)), dim=2)
-            testOut = torch.cat((self.lineOut[indices][maxIdx:], torch.zeros(self.atmosIn.shape[0] - maxIdx, self.lineOut.shape[1], zeroPadding)), dim=2)
-        else:
-            trainIn = self.atmosIn[indices][:maxIdx]
-            trainOut = self.lineOut[indices][:maxIdx]
-            testIn = self.atmosIn[indices][maxIdx:]
-            testOut = self.lineOut[indices][maxIdx:]
+        #maxIdx = int(self.atmosIn.shape[0] * (1.0 - testingFraction)) + 1
+        #if zeroPadding != 0:
+        #    trainIn = torch.cat((self.atmosIn[indices][:maxIdx], torch.zeros(maxIdx, self.atmosIn.shape[1], zeroPadding)), dim=2)
+        #    trainOut = torch.cat((self.lineOut[indices][:maxIdx], torch.zeros(maxIdx, self.lineOut.shape[1], zeroPadding)), dim=2)
+        #    testIn = torch.cat((self.atmosIn[indices][maxIdx:], torch.zeros(self.atmosIn.shape[0] - maxIdx, self.atmosIn.shape[1], zeroPadding)), dim=2)
+        #    testOut = torch.cat((self.lineOut[indices][maxIdx:], torch.zeros(self.atmosIn.shape[0] - maxIdx, self.lineOut.shape[1], zeroPadding)), dim=2)
+        #else:
+        test_num = int(self.atmosIn.shape[0]*testingFraction)
+
+        trainIn = self.atmosIn[:-test_num]
+        trainOut = self.atmosOut[:-test_num]
+        testIn = self.atmosIn[-test_num:]
+        testOut = self.atmosOut[-test_num:]
 
         self.testLoader = torch.utils.data.DataLoader(
-                    torch.utils.data.TensorDataset(testIn, testOut), 
+                    torch.utils.data.TensorDataset(torch.tensor(testIn), torch.tensor(testOut)), 
                     batch_size=batchSize, shuffle=True, drop_last=True)
         self.trainLoader = torch.utils.data.DataLoader(
-                    torch.utils.data.TensorDataset(trainIn, trainOut), 
-                    batch_size=batchSize, shuffle=True, drop_last=True)
+                    torch.utils.data.TensorDataset(torch.tensor(trainIn), torch.tensor(trainOut)),
+                    batch_size=self.batchSize, shuffle=True, drop_last=True)
+                    
 
 
