@@ -67,40 +67,40 @@ dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # global parameters
 sig_model = 'sg'   # the signal model to use
-run_label='gpu4'
+run_label='gpu7'
 out_dir = "/home/hunter.gabbard/public_html/CBC/cINNamon/gausian_results/multipar/%s/" % run_label
 do_posterior_plots=True
 ndata=64           # length of 1 data sample
 ndim_x=3           # number of parameters to PE on
 ndim_y = ndata     # length of 1 data sample
-ndim_z = 114       # size of latent space
+ndim_z = 3       # size of latent space
 Ngrid=64
-n_neurons = 200
+n_neurons = 0
 ndim_tot = max(ndim_x,ndim_y+ndim_z) + n_neurons # 384     
 r = 3              # the grid dimension for the output tests
 sigma = 0.2        # the noise std
 seed = 1           # seed for generating data
 test_split = r*r   # number of testing samples to use
-N_samp = 4000 # number of test samples to use after training
-plot_cadence = 100   # make plots every N iterations
+N_samp = 8000 # number of test samples to use after training
+plot_cadence = 10  # make plots every N iterations
 numInvLayers=5
 dropout=0.0
 filtsize = 3       # TODO
 clamp=2.0          # TODO
-tot_dataset_size=int(1e7) # TODO really should use 1e8 once cpu is fixed
+tot_dataset_size=int(1e6) # TODO really should use 1e8 once cpu is fixed
 tot_epoch=11000
-lr=1.5e-3
+lr=1.0e-3
 zerosNoiseScale=5e-2
-wPred=4000.0        #4000.0
-wLatent= 2900.0     #900.0
-wRev= 1000.0        #1000.0
+wPred=300.0        #4000.0
+wLatent= 300.0     #900.0
+wRev= 400.0        #1000.0
 latentAlphas=None #[8,11]
 backwardAlphas=None # [1.4, 2, 5.5, 7]
 conv_nn = False    # Choose to use convolutional layers. TODO
 multi_par=True
 load_dataset=True
 do_contours=True
-do_mcmc=False
+do_mcmc=True
 dataLocation1 = 'benchmark_data.h5py'
 T = 1.0           # length of time series (s)
 dt = T/ndata        # sampling time (Sec)
@@ -332,7 +332,7 @@ for i in range(r):
         axes[i,j].plot(data.x,np.array(sig_test[cnt,:]),'-')
         cnt += 1
         axes[i,j].axis([0,1,-1.5,1.5])
-plt.savefig("%stest_distribution.png" % out_dir,dpi=360)
+plt.savefig("%stest_distribution.pdf" % out_dir,dpi=360)
 plt.close()
 
 # setup output directory - if it does not exist
@@ -425,7 +425,7 @@ try:
             
                 
             fig.canvas.draw()
-            fig.savefig('%slosses.png' % out_dir)
+            fig.savefig('%slosses.pdf' % out_dir)
 
         if do_posterior_plots and ((epoch % plot_cadence == 0) & (epoch>5)):
 
@@ -433,7 +433,7 @@ try:
             # choose which test sample
             cnt = 3
             # initialize plot for showing testing results
-            fig_post, axes = plt.subplots(ndim_x,ndim_x,figsize=(ndim_x,ndim_x))
+            fig_post, axes = plt.subplots(ndim_x,ndim_x,figsize=(10,8))
 
             # convert data into correct format
             y_samps = np.tile(np.array(labels_test[cnt,:]),N_samp).reshape(N_samp,ndim_y)
@@ -448,22 +448,54 @@ try:
             rev_x = model(y_samps, rev=True)
             rev_x = rev_x.cpu().data.numpy()
 
+            # make contour plots of INN time series predictions
+            xvec = np.arange(ndata)/float(ndata)
+            w=3.8
+            p=0.5
+            sig_preds=[]
+            for i in range(len(rev_x)):
+                sig_preds.append([rev_x[i,0]*np.sin(2.0*np.pi*w*fnyq*(x-rev_x[i,1]) + 2.0*np.pi*p)*np.exp(-((x-rev_x[i,1])/rev_x[i,2])**2) for x in xvec])
+            sig_preds=np.array(sig_preds)
+
+            # compute percentile curves
+            perc_90 = []
+            perc_75 = []
+            perc_25 = []
+            perc_5 = []
+            for n in range(sig_preds.shape[1]):
+                perc_90.append(np.percentile(sig_preds[:,n], 90))
+                perc_75.append(np.percentile(sig_preds[:,n], 75))
+                perc_25.append(np.percentile(sig_preds[:,n], 25))
+                perc_5.append(np.percentile(sig_preds[:,n], 5))
+
+            fig_tseries, ax_tseries = plt.subplots(1,1,figsize=(10,8))
+
+            #for i in range(10):
+            #    ax_tseries.plot(data.x*ndata,sig_preds[i],color='grey',alpha=0.5)
+            ax_tseries.fill_between(np.linspace(0,len(perc_90),num=len(perc_90)),perc_90, perc_5, lw=0,facecolor='#d5d8dc')
+            ax_tseries.fill_between(np.linspace(0,len(perc_75),num=len(perc_75)),perc_75, perc_25, lw=0,facecolor='#808b96')
+            ax_tseries.plot(data.x*ndata,labels_test[cnt,:],color='black')
+            ax_tseries.plot(data.x*ndata,np.array(sig_test[cnt,:]),'-',color='cyan')
+            fig_post.savefig('%stseries_preds_%s.pdf' % (out_dir,epoch), dpi=360)
+            fig_tseries.savefig('%stseries_preds_latest.pdf' % out_dir, dpi=360)
+
             # make corner plot for one test waveform
             cnt_plot = ndim_x
             cnt_y = 0
-            count_b_x = 0
+            cnt_beta = 0
+            beta_score_loop = []
             #plot_labels = [r"$Amplitude$", r"$t0$", r"$f$", r"$\phi$", r"$\sigma$"]
             plot_labels = [r"$Amplitude$", r"$t0$", r"$\sigma$"]
             for i in range(ndim_x):
                 for j in range(cnt_plot):
                     axes[-j+cnt_plot-1+cnt_y,i].clear()
                     #axes[-j+cnt_plot-1+cnt_y,i].contour(mvec,cvec,lik[0,0,:].reshape(Ngrid,Ngrid),levels=[0.68,0.9,0.99])
-                    axes[-j+cnt_plot-1+cnt_y,i].scatter(rev_x[:,i], rev_x[:,-j+cnt_plot-1+cnt_y],edgecolors='none',s=0.1,alpha=1.0,color='red')
-                    axes[-j+cnt_plot-1+cnt_y,i].scatter(true_post[0,0,:,i],true_post[0,0,:,-j+cnt_plot-1+cnt_y],edgecolors='none',s=0.1,alpha=0.5,color='blue')
-                    axes[-j+cnt_plot-1+cnt_y,i].plot(pos_test[cnt,i],pos_test[cnt,-j+cnt_plot-1+cnt_y],'+c',markersize=3,markeredgewidth=0.5,alpha=0.75)
+                    axes[-j+cnt_plot-1+cnt_y,i].scatter(rev_x[:,i], rev_x[:,-j+cnt_plot-1+cnt_y],edgecolors='none',alpha=1.0,s=0.8,color='red')
+                    axes[-j+cnt_plot-1+cnt_y,i].scatter(true_post[0,0,:,i],true_post[0,0,:,-j+cnt_plot-1+cnt_y],edgecolors='none',s=0.8,alpha=0.5,color='blue') # s=0.3
+                    axes[-j+cnt_plot-1+cnt_y,i].plot(pos_test[cnt,i],pos_test[cnt,-j+cnt_plot-1+cnt_y],'+c',markersize=5,markeredgewidth=0.5,alpha=0.75)
                     axes[-j+cnt_plot-1+cnt_y,i].set_xlabel(plot_labels[i])
                     axes[-j+cnt_plot-1+cnt_y,i].set_ylabel(plot_labels[-j+cnt_plot-1+cnt_y])
-                    axes[-j+cnt_plot-1+cnt_y,i].tick_params(labelsize=2)
+                    #axes[-j+cnt_plot-1+cnt_y,i].tick_params(labelsize=2)
                     #axes[-j+cnt_plot-1+cnt_y,i].axis([bound[i*2],bound[(i*2)+1],bound[(-j+cnt_plot-1+cnt_y)*2],bound[((-j+cnt_plot-1+cnt_y)*2)+1]])
                     axes[-j+cnt_plot-1+cnt_y,i].axis(bound[:4])
 
@@ -489,9 +521,16 @@ try:
                             ks_score, ad_score, beta_score = overlap_tests(np.vstack((rev_x[:,i],rev_x[:,-j+cnt_plot-1+cnt_y])),
                                                                                    np.vstack((true_post[0,0,:,i],true_post[0,0,:,-j+cnt_plot-1+cnt_y])),
                                                                                    np.vstack((pos_test[cnt,i],pos_test[cnt,-j+cnt_plot-1+cnt_y])),kernel_cnn,kernel_mcmc)
-                            axes[-j+cnt_plot-1+cnt_y,i].legend(['Overlap: %s' % str(np.round(beta_score,3))], prop={'size': 3})
+                            axes[-j+cnt_plot-1+cnt_y,i].legend(['Overlap: %s' % str(np.round(beta_score,3))])#, prop={'size': 3})
 
-                            beta_score_hist.append([beta_score])
+                            # save and plot history of overlap score
+                            beta_score_loop.append([beta_score])
+                            cnt_beta+=1
+                            if cnt_beta==ndim_x: 
+                                beta_score_hist.append(np.mean(beta_score_loop))
+                                fig_beta, ax_beta = plt.subplots(1,1, figsize=(10,8))
+                                ax_beta.plot(np.linspace(plot_cadence,epoch,len(beta_score_hist)),beta_score_hist)
+                                fig_beta.savefig('%sbeta_history.pdf' % out_dir,dpi=360)
                     except Exception as e: 
                         print(e)
                     #    exit()
@@ -500,7 +539,7 @@ try:
                 cnt_plot -= 1
                 cnt_y += 1
 
-            cnt_y = 0            
+            cnt_y = 0
             # remove plots not used
             for i in range(ndim_x):
                 for j in range(cnt_y,ndim_x):
@@ -513,8 +552,9 @@ try:
             #                       quantiles=[0.68, 0.9, 0.99], fig=figure, color='blue',
             #                       show_titles=True, title_kwargs={"fontsize": 12}) 
             fig_post.canvas.draw()
-            fig_post.savefig('%sposteriors_%s.png' % (out_dir,epoch),dpi=360)
-            fig_post.savefig('%slatest.png' % out_dir,dpi=360)
+            fig_post.tight_layout()
+            fig_post.savefig('%sposteriors_%s.pdf' % (out_dir,epoch),dpi=360)
+            fig_post.savefig('%slatest.pdf' % out_dir,dpi=360)
             #plt.clf()
             #plt.close()
 except KeyboardInterrupt:
@@ -760,7 +800,7 @@ with torch.no_grad():
 
 
 # Save the above figure if desired
-fig.savefig('ForwardProcess2.png', dpi=300)
+fig.savefig('ForwardProcess2.pdf', dpi=300)
 
 
 # Test the model's inverse solution on a random validation sample from the test set, with `batchSize` number of random draws from the latent space, plot these results and the round-trip line profiles. The interpretation of these figures is discussed in the paper, but in short, the bars on the 2D histogram for the atmospheric profiles show the probability of the parameter value at each atmospheric node. The dashed black lines show the expected solution. The thin bars on the line profiles show the round trip (i.e. forward(inverse(lineProfiles))) in histogram form.

@@ -166,6 +166,9 @@ class F_fully_connected_leaky(nn.Module):
         self.nl1 = nn.LeakyReLU(negative_slope=leaky_slope)
         self.nl2 = nn.LeakyReLU(negative_slope=leaky_slope)
         self.nl2b = nn.LeakyReLU(negative_slope=leaky_slope)
+        #self.nl1 = nn.ReLU()
+        #self.nl2 = nn.ReLU()
+        #self.nl2b = nn.ReLU()
         # self.nl2c = nn.LeakyReLU(negative_slope=leaky_slope)
         self.nl2d = nn.ReLU()
 
