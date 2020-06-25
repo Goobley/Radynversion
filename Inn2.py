@@ -5,7 +5,7 @@ import numpy as np
 from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet
 from FrEIA.modules import rev_multiplicative_layer, permute_layer
 
-from loss import mse, mse_tv, mmd_multiscale_on
+from .loss import mse, mse_tv, mmd_multiscale_on
 
 from scipy.interpolate import interp1d
 

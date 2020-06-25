@@ -1,4 +1,4 @@
-from Inn2 import RadynversionNet
+from .Inn2 import RadynversionNet
 import os
 import numpy as np
 from scipy.interpolate import interp1d
@@ -382,3 +382,5 @@ def interp_fine(spec_line):
     y_new = interp1d(x,y)(x_new)
 
     return np.array([x_new,y_new])
+
+z = np.array([-0.065, 0.016, 0.097, 0.178, 0.259, 0.340, 0.421, 0.502, 0.583, 0.664, 0.745, 0.826, 0.907, 0.988, 1.069, 1.150, 1.231, 1.312, 1.393, 1.474, 1.555, 1.636, 1.718, 1.799, 1.880, 1.961, 2.042, 2.123, 2.204, 2.285, 2.366, 2.447, 2.528, 2.609, 2.690, 2.771, 2.852, 2.933, 3.014, 3.095, 3.176, 3.257, 3.338, 3.419, 3.500, 4.360, 5.431, 6.766, 8.429, 10.5], dtype=np.float32)
